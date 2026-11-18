@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Grey: text to speech in ten languages" width="100%">
+  <img src="assets/banner.svg" alt="Grey: free AI text to speech and voice cloning in ten languages" width="100%">
 </p>
+
+<h1 align="center">Grey: free AI text to speech and voice cloning</h1>
 
 <p align="center">
   <a href="https://thisvoiceisai.com/download/"><img src="https://img.shields.io/badge/⬇_download-Grey_Studio_for_Windows-d8322e?style=for-the-badge" alt="Download Grey Studio for Windows"></a>
@@ -18,7 +20,10 @@
   <img src="https://img.shields.io/badge/output-AI--marked-8a2be2" alt="Output marked as AI">
 </p>
 
-**Grey** is a text-to-speech model named after the African grey parrot 🦜: the bird that talks back in your own voice.
+**Grey** is a free, open AI text-to-speech (TTS) and voice cloning model: natural speech in 10 languages, a clone of your
+voice from a short recording, and voice to voice. Use it [free online at thisvoiceisai.com](https://thisvoiceisai.com), offline
+with the [Grey Studio Windows app](https://thisvoiceisai.com/download/), or from this repository. It's named after the
+African grey parrot 🦜: the bird that talks back in your own voice.
 It speaks **ten languages**, **clones a voice** from a short recording, does **voice to voice**, and lets you steer
 *how* it talks: whispering, acting, fast, slow, timing and emphasis. It makes speech as continuous latents with flow
 matching, decoded at 44.1 kHz by the KVAE-Audio codec.
@@ -233,6 +238,21 @@ Your own, or someone who said yes. Never use Grey to impersonate, deceive or def
 Yes: a front-end in `dacts/text.py`, some transcribed speech, and a fine-tune from v16+ (grow the language table with
 `grow.py`). Open an issue first and we'll help.
 </details>
+
+## 🌐 Grey online
+
+Everything here also runs on [thisvoiceisai.com](https://thisvoiceisai.com), free, in the browser:
+
+- [AI voice generator](https://thisvoiceisai.com/ai-voice-generator/) and [free text to speech](https://thisvoiceisai.com/text-to-speech/)
+- [Clone your voice](https://thisvoiceisai.com/clone-my-voice/) from a short recording · [voice changer](https://thisvoiceisai.com/voice-changer/) (voice to voice)
+- Text to speech in [Dutch](https://thisvoiceisai.com/dutch-text-to-speech/), [German](https://thisvoiceisai.com/german-text-to-speech/),
+  [French](https://thisvoiceisai.com/french-text-to-speech/), [Spanish](https://thisvoiceisai.com/spanish-text-to-speech/),
+  [Polish](https://thisvoiceisai.com/polish-text-to-speech/), [Japanese](https://thisvoiceisai.com/japanese-text-to-speech/),
+  [Chinese](https://thisvoiceisai.com/chinese-text-to-speech/) and [Korean](https://thisvoiceisai.com/korean-text-to-speech/)
+- For [YouTube voice-overs](https://thisvoiceisai.com/youtube-voiceover/), [podcasts](https://thisvoiceisai.com/podcast-voice/),
+  [game characters](https://thisvoiceisai.com/game-character-voices/) and [reading text aloud](https://thisvoiceisai.com/read-aloud/)
+- [How Grey compares](https://thisvoiceisai.com/tts-comparison/) with F5-TTS, CosyVoice, MaskGCT and others ·
+  [a free ElevenLabs alternative](https://thisvoiceisai.com/elevenlabs-alternative/) · [what's new](https://thisvoiceisai.com/whats-new/)
 
 ## 🤝 Contributing
 

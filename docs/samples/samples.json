@@ -7,9 +7,9 @@
  },
  {
   "id": "de",
-  "voice": "lib_jonas",
+  "voice": "lib_lena",
   "text": "Guten Morgen! Der Kaffee ist fertig, und ich habe heute erstaunlich gute Laune.",
-  "seconds": 3.9,
+  "seconds": 4.1,
   "seed": 2
  },
  {
@@ -71,10 +71,10 @@
  },
  {
   "id": "en_fast",
-  "voice": "lib_daan",
+  "voice": "lib_lena",
   "text": "And when I'm in a hurry, I can talk really, really fast without tripping over my words.",
-  "seconds": 4.0,
-  "seed": 1
+  "seconds": 4.1,
+  "seed": 2
  },
  {
   "id": "en_slow",

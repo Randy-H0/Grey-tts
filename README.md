@@ -69,6 +69,7 @@ model has never heard from a short clip, read new text, then count word errors a
 | Model | Size | EN word errors ↓ | EN voice match ↑ | ZH word errors ↓ | ZH voice match ↑ |
 |---|---|---|---|---|---|
 | **Grey v16+** ⭐ | 489M | 2.16 % | 0.65 | **0.76 %** | 0.73 |
+| **Grey v16+ · Enhance voice** | 489M | 2.42 % | 0.68 | 1.22 % | 0.76 |
 | **Grey v15+** | 489M | 2.44 % | 0.65 | 0.81 % | 0.74 |
 | **Grey v15+ · Enhance voice** | 489M | 2.49 % | 0.67 | 1.47 % | 0.76 |
 | F5-TTS | 336M | **1.83 %** | 0.65 | 1.56 % | 0.74 |

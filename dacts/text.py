@@ -282,7 +282,7 @@ def _script(text: str) -> str:
     return "latin"
 
 
-def _detect_lang(text: str, allowed=None, fallback=None, table_path=None) -> str:
+def _detect_lang(text: str, allowed=None, fallback=None, table_path=None, scores=None) -> str:
     # (allowed None = every language a model on the site knows today: langs_of(9); no model reads uk yet)
     allowed = langs_of(9) if allowed is None else allowed
     fallback = fallback or _detect_lang_rules
@@ -322,13 +322,32 @@ def _detect_lang(text: str, allowed=None, fallback=None, table_path=None) -> str
                 tot[j] += max(s[j] - m, -_WORD_CLIP)
     if not nw:
         return "en"
+    if scores is not None:  # (11-18) every allowed language's score, for detect_lang's short-line rule
+        scores.update({langs[j]: tot[j] + t["bonus"].get(langs[j], 0.0) * nw for j in idx})
     return langs[max(idx, key=lambda j: tot[j] + t["bonus"].get(langs[j], 0.0) * nw)]
 
 
-def detect_lang(text: str, allowed=None) -> str:
+SHORT_WORDS, SHORT_MARGIN = 3, 2.3
+
+
+def detect_lang(text: str, allowed=None, prefer=None) -> str:
     """The language of a line among `allowed` (the speaking model's languages: langs_of(model.cfg.n_langs));
-    without it, ACTIVE_LANGS (what every model on the site reads)."""
-    return _detect_lang(text, ACTIVE_LANGS if allowed is None else allowed)
+    without it, ACTIVE_LANGS (what every model on the site reads).
+    prefer (11-18, you: lone "No." was read as Spanish, "Sure." as French): the voice's own language. On lines of up to
+    3 words the letter statistics are close to a coin toss, so the voice's language wins when it scores within
+    SHORT_MARGIN of the best ("No." en 1.5 behind es -> en; "Danke" de 2.2 behind nl -> de for a German voice; "Hola." en
+    2.4 behind -> stays es), and an English voice says English when every word is a common English word ("Sure.")."""
+    allowed = ACTIVE_LANGS if allowed is None else allowed
+    sc = {}
+    got = _detect_lang(text, allowed, scores=sc)
+    if prefer and prefer != got and prefer in allowed and _script(text) == "latin":
+        ws = _words(text)
+        if 0 < len(ws) <= SHORT_WORDS:
+            if prefer == "en" and all(w in _common_words() for w in ws):
+                return "en"
+            if prefer in sc and got in sc and sc[got] - sc[prefer] <= SHORT_MARGIN:
+                return prefer
+    return got
 
 # ---------------------------------------------------------------- Spanish
 def _num_es(m: re.Match) -> str:

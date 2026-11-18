@@ -569,7 +569,15 @@ class Synthesizer:
         texts = [texts] if isinstance(texts, str) else texts
         # lang: "en" / "ja" / "auto" (Japanese if the text has kana or kanji) / None (label left out;
         # the text is still read as detected)
-        detected = [T.detect_lang(t, T.langs_of(getattr(self.model.cfg, 'n_langs', 8))) for t in texts]
+        # (11-18, you: "lets do 1-3") band guidance 2.0 by default whenever full band is asked for: German / squeezed lines
+        # with the library voices (36 takes) went from 33 % dull (< 12 kHz) to 6 %, word errors 8.9 -> 7.6 %, DNSMOS the
+        # same, English unchanged; no extra time (the low-band pass rides in the batched guidance). A deliberately
+        # muffled request (band < 0.99) is left alone.
+        if band is not None and float(band) >= 0.99:
+            kw.setdefault("band_guidance", 2.0)
+        # (11-18) short lines lean to the voice's own language (a clone: its reference's; Grey's own voice: English)
+        _pref = ((getattr(self, "speaker_langs", {}) or {}).get(spk_name) if spk_name else None) or             (prompt.get("lang") if isinstance(prompt, dict) else None) or "en"
+        detected = [T.detect_lang(t, T.langs_of(getattr(self.model.cfg, 'n_langs', 8)), prefer=_pref) for t in texts]
         langs = detected if lang in ("auto", None) else [lang] * len(texts)
         # a prompt in another language (an English clone reference, a Dutch line) makes the model continue IN the
         # prompt's language: owner's clone, Dutch line on v11 sounded 51-84% Dutch with it, 97-99% without. The

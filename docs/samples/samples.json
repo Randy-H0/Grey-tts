@@ -71,10 +71,10 @@
  },
  {
   "id": "en_fast",
-  "voice": "lib_lena",
+  "voice": "lib_jonas",
   "text": "And when I'm in a hurry, I can talk really, really fast without tripping over my words.",
-  "seconds": 4.1,
-  "seed": 2
+  "seconds": 2.9,
+  "seed": 9
  },
  {
   "id": "en_slow",

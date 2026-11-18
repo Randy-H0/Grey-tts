@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://randy-h0.github.io/Grey-tts/"><img src="https://img.shields.io/badge/🎧_listen-samples-d8322e?style=for-the-badge" alt="Listen to samples"></a>
-  <a href="https://thisvoiceisai.com"><img src="https://img.shields.io/badge/🌐_try_it-in_your_browser-1f2a44?style=for-the-badge" alt="Try it in your browser"></a>
-  <a href="https://thisvoiceisai.com/download/"><img src="https://img.shields.io/badge/💻_Grey_Studio-Windows_app-5b6478?style=for-the-badge" alt="Grey Studio for Windows"></a>
+  <a href="https://thisvoiceisai.com/download/"><img src="https://img.shields.io/badge/⬇_download-Grey_Studio_for_Windows-d8322e?style=for-the-badge" alt="Download Grey Studio for Windows"></a>
+  <a href="https://randy-h0.github.io/Grey-tts/"><img src="https://img.shields.io/badge/🎧_listen-samples-1f2a44?style=for-the-badge" alt="Listen to samples"></a>
+  <a href="https://thisvoiceisai.com"><img src="https://img.shields.io/badge/🌐_try_it-in_your_browser-5b6478?style=for-the-badge" alt="Try it in your browser"></a>
 </p>
 
 <p align="center">
@@ -23,8 +23,26 @@ It speaks **ten languages**, **clones a voice** from a short recording, does **v
 *how* it talks: whispering, acting, fast, slow, timing and emphasis. It makes speech as continuous latents with flow
 matching, decoded at 44.1 kHz by the KVAE-Audio codec.
 
-This repository is the model, inference, training and a command line. Don't want to code? Use the
-[website](https://thisvoiceisai.com) or the offline [Grey Studio](https://thisvoiceisai.com/download/) app for Windows.
+## 💻 Grey Studio: the app, no coding needed
+
+<a href="https://thisvoiceisai.com/download/"><img src="assets/studio.png" alt="Grey Studio" width="100%"></a>
+
+<p align="center">
+  <a href="https://thisvoiceisai.com/download/"><img src="https://img.shields.io/badge/⬇_Download_Grey_Studio-free_for_Windows-d8322e?style=for-the-badge&logoColor=white" alt="Download Grey Studio" height="48"></a>
+</p>
+
+Everything Grey can do, in one offline Windows app:
+
+- 🎙️ **Speak, clone and voice-to-voice** with every control: quality, delivery, randomness, guidance.
+- 🧩 **Node editor** (tick *Use nodes*): wire text, voices, pitch, rhythm and emphasis together like building blocks.
+- 🏋️ **Train your own voice** from a few minutes of audio, on graphics cards from 6 GB.
+- ⬇️ **Every Grey model** to download in the app, from v6 to v16+.
+- 🔒 **Runs on your PC**: your text, recordings and voices never leave it. It updates itself.
+
+Windows 10/11, an NVIDIA graphics card recommended. [Download page](https://thisvoiceisai.com/download/) (licence and
+checksum there).
+
+This repository is the model, inference, training and a command line, for people who want to work on Grey itself.
 
 ## 🎧 Listen
 
@@ -107,6 +125,8 @@ python grey.py download --list                                   # every model a
 python grey.py voices                                            # the built-in voices of a model
 python grey.py speak "Guten Tag!" --voice lib_lena -o hallo.wav  # a built-in voice
 python grey.py speak "Hi, it's me." --ref me.wav -o me.wav       # your own voice from a 10-30 s recording
+                                                                 # (Enhance voice + Experimental cloning on; --no-enhance /
+                                                                 #  --no-experimental for speed)
 python grey.py vtv input.wav --voice lib_daan -o out.wav         # voice to voice (v14.5 and newer)
 python grey.py speak "Shh..." --voice lib_lena --speed 0.2 -o s.wav --seed 7
 ```

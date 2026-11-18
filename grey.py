@@ -73,7 +73,16 @@ def cmd_speak(a):
         kw["lang_fix"] = "steer"  # (a voice speaking another language gets that language's accent)
     if a.speed is not None:
         kw["speed"] = a.speed
+    if prompt is not None and not a.no_experimental:  # Experimental cloning: no guidance on the noisiest steps + anti-voice
+        kw.update(cfg_from=0.2, anti_voice=1.0)
     w = s(a.text, speaker=speaker, **kw)[0]
+    if prompt is not None and not a.no_enhance and getattr(s.model, "vtv_in", None) is not None:
+        # Enhance voice: the take through voice to voice once more, toward the recording (Seed-TTS EN voice match 0.65 -> 0.68)
+        import dacts.text as T
+        lang = a.lang if a.lang != "auto" else T.detect_lang(a.text)
+        print("enhancing the voice (second pass)...", flush=True)
+        w = s.convert(torch.as_tensor(w), speaker="ref", prompt=prompt, lang=lang, steps=8, guidance=2.0,
+                      max_seconds=len(w) / 44100 + 1.0)
     write_ai_wav(a.out, w, 44100)
     print(f"wrote {a.out} ({len(w) / 44100:.1f} s, marked as AI-generated)")
 
@@ -127,6 +136,8 @@ def main():
     p.add_argument("--guidance", type=float, default=3.0)
     p.add_argument("--temperature", type=float, default=0.85)
     p.add_argument("--speed", type=float, help="0 slow .. 1 fast")
+    p.add_argument("--no-enhance", action="store_true", help="with --ref: skip Enhance voice (the second pass: about half the time)")
+    p.add_argument("--no-experimental", action="store_true", help="with --ref: skip Experimental cloning (steadier, a bit less close)")
     p.set_defaults(fn=cmd_speak)
     p = sub.add_parser("vtv", parents=[common], help="voice to voice: a recording said again in another voice")
     p.add_argument("input")

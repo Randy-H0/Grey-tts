@@ -11,6 +11,7 @@ runs/
 *.wav
 *.mp3
 *.flac
+!docs/samples/*.mp3
 # Python / tools
 __pycache__/
 *.pyc

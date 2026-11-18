@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use Grey in your research, please cite it like this."
+title: "Grey: multilingual text to speech with voice cloning and voice to voice"
+type: software
+authors:
+  - name: "Grey TTS contributors"
+repository-code: "https://github.com/Randy-H0/Grey-tts"
+url: "https://thisvoiceisai.com"
+license-url: "https://github.com/Randy-H0/Grey-tts/blob/main/LICENSE"
+version: "16+"
+date-released: "2026-11-18"
+keywords:
+  - text-to-speech
+  - tts
+  - voice-cloning
+  - flow-matching
+  - multilingual

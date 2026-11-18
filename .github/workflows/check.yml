@@ -1,0 +1,20 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Every Python file compiles
+        run: python -m compileall -q dacts grey.py download_model.py train.py tools third_party
+      - name: No syntax errors or undefined names
+        run: |
+          pip install ruff
+          ruff check --select E9,F63,F7,F82 --output-format github .

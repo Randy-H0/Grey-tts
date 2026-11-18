@@ -1,0 +1,88 @@
+[
+ {
+  "id": "en",
+  "voice": "lib_jonas",
+  "text": "Hi, I'm Grey! I'm named after a parrot that never stops talking, so, fair warning.",
+  "seconds": 4.5
+ },
+ {
+  "id": "de",
+  "voice": "lib_lena",
+  "text": "Guten Morgen! Der Kaffee ist fertig, und ich habe heute erstaunlich gute Laune.",
+  "seconds": 3.3
+ },
+ {
+  "id": "nl",
+  "voice": "lib_daan",
+  "text": "Het regent alweer in Amsterdam, maar eerlijk gezegd vind ik dat best gezellig.",
+  "seconds": 3.3
+ },
+ {
+  "id": "fr",
+  "voice": "lib_lena",
+  "text": "Bonjour ! Je peux lire ce texte avec plaisir, même si la phrase est un peu longue.",
+  "seconds": 3.5
+ },
+ {
+  "id": "es",
+  "voice": "lib_jonas",
+  "text": "¡Hola! Hoy hace un día precioso para salir a pasear por la playa.",
+  "seconds": 3.0,
+  "seed": 2
+ },
+ {
+  "id": "pl",
+  "voice": "lib_daan",
+  "text": "Dzień dobry! Chciałbym zamówić dużą pizzę z podwójnym serem, poproszę.",
+  "seconds": 3.3
+ },
+ {
+  "id": "uk",
+  "voice": "lib_lena",
+  "text": "Привіт! Сьогодні чудовий день, щоб вивчити щось нове.",
+  "seconds": 3.9
+ },
+ {
+  "id": "ja",
+  "voice": "lib_lena",
+  "text": "こんにちは！今日はとてもいい天気ですね。散歩に行きませんか？",
+  "seconds": 5.0
+ },
+ {
+  "id": "zh",
+  "voice": "lib_jonas",
+  "text": "你好！我是一个会说十种语言的语音模型，很高兴认识你。",
+  "seconds": 4.6,
+  "seed": 1
+ },
+ {
+  "id": "ko",
+  "voice": "lib_lena",
+  "text": "안녕하세요! 오늘 저녁에 같이 맛있는 거 먹으러 갈래요?",
+  "seconds": 3.1
+ },
+ {
+  "id": "en_whisper",
+  "voice": "lib_lena",
+  "text": "Shh. Don't tell anyone, but I can whisper too.",
+  "seconds": 3.3
+ },
+ {
+  "id": "en_fast",
+  "voice": "lib_jonas",
+  "text": "And when I'm in a hurry, I can talk really, really fast without tripping over my words.",
+  "seconds": 3.7
+ },
+ {
+  "id": "en_slow",
+  "voice": "lib_daan",
+  "text": "Or I can take my time... and say every word... slowly.",
+  "seconds": 4.4
+ },
+ {
+  "id": "en_acting",
+  "voice": "lib_jonas",
+  "text": "No way! You actually did it? That's the best news I've heard all week!",
+  "seconds": 3.1
+ }
+]

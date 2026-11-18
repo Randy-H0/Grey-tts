@@ -1,0 +1,32 @@
+name: 🐛 Bug report
+description: Something doesn't work or sounds wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you run, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: cmd
+    attributes:
+      label: Command or code
+      description: The exact command (with --seed if it's about the sound) or a small code snippet.
+      render: shell
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: v16plus
+  - type: input
+    id: system
+    attributes:
+      label: System
+      placeholder: Windows 11, RTX 3060 12 GB, Python 3.12, torch 2.8
+  - type: textarea
+    id: log
+    attributes:
+      label: Error output
+      render: shell

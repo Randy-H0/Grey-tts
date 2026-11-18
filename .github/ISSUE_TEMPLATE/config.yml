@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 🌐 Try Grey in the browser
+    url: https://thisvoiceisai.com
+    about: The website, free to use
+  - name: 💻 Grey Studio (Windows app)
+    url: https://thisvoiceisai.com/download/
+    about: The offline desktop app, with all models

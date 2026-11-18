@@ -507,7 +507,7 @@ def main():
         if any(k.startswith("decoder.blocks.") for k in list(_res.unexpected_keys) + list(missing)):  # (11-14 Solver review)
             raise SystemExit(f"resume: decoder depth differs from the checkpoint (cfg.dec_layers={cfg.dec_layers}, checkpoint "
                              f"{ck['cfg'].get('dec_layers')}): fix --set / SET")
-        ema.load_state_dict(ck["ema"], strict=False)
+        ema.load_state_dict(ck["ema"] if ck.get("ema") is not None else ck["model"], strict=False)
         if missing:
             print(f"resume: new parameters start fresh: {sorted({k.rsplit('.', 2)[0] for k in missing})}")
         load_optimizer_by_name(opt, ck, model, missing)
@@ -520,7 +520,9 @@ def main():
         print(f"resumed at step {step}")
     if init is not None:
         model.load_state_dict(init["model"], strict=False)  # new modules (e.g. code picker) start fresh
-        ema.load_state_dict(init["ema"], strict=False)
+        # (11-18, a user's full fine-tune: KeyError 'ema') the app's downloads are slimmed copies with only "model" (= the
+        # averaged weights): start the average from those
+        ema.load_state_dict(init["ema"] if init.get("ema") is not None else init["model"], strict=False)
         print(f"initialized from {args.init} (grown from {init.get('grown_from')})")
     # 2026-11-12 (you: "it doesn't need to be that full"): the loaded checkpoint stayed in RAM for the whole run -- a
     # second copy of every weight (+ the optimizer's state on a resume); nothing below reads it

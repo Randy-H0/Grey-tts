@@ -7,9 +7,10 @@
  },
  {
   "id": "de",
-  "voice": "lib_lena",
+  "voice": "lib_jonas",
   "text": "Guten Morgen! Der Kaffee ist fertig, und ich habe heute erstaunlich gute Laune.",
-  "seconds": 3.3
+  "seconds": 3.9,
+  "seed": 2
  },
  {
   "id": "nl",
@@ -63,15 +64,17 @@
  },
  {
   "id": "en_whisper",
-  "voice": "lib_lena",
+  "voice": "lib_jonas",
   "text": "Shh. Don't tell anyone, but I can whisper too.",
-  "seconds": 3.3
+  "seconds": 3.8,
+  "seed": 1
  },
  {
   "id": "en_fast",
-  "voice": "lib_jonas",
+  "voice": "lib_daan",
   "text": "And when I'm in a hurry, I can talk really, really fast without tripping over my words.",
-  "seconds": 3.7
+  "seconds": 4.0,
+  "seed": 1
  },
  {
   "id": "en_slow",
@@ -81,8 +84,9 @@
  },
  {
   "id": "en_acting",
-  "voice": "lib_jonas",
+  "voice": "lib_daan",
   "text": "No way! You actually did it? That's the best news I've heard all week!",
-  "seconds": 3.1
+  "seconds": 4.6,
+  "seed": 0
  }
 ]

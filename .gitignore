@@ -1,0 +1,23 @@
+# models and data: downloaded or made, never committed
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+!third_party/**/*.onnx
+!configs/*.pt
+data/
+runs/
+*.wav
+*.mp3
+*.flac
+# Python / tools
+__pycache__/
+*.pyc
+.venv*/
+*.egg-info/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.bak*
+.grey-export

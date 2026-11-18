@@ -1,0 +1,30 @@
+# Grey -- tested with Python 3.12. Install PyTorch first, for your GPU:
+#   pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+# then:  pip install -r requirements.txt  &&  pip install -e third_party/kvae-audio
+numpy>=2.0
+scipy>=1.14
+soundfile>=0.13
+soxr>=0.5
+av>=14
+librosa>=0.11
+transformers>=5.0
+tokenizers>=0.21
+safetensors>=0.5
+huggingface_hub>=0.30
+einops>=0.8
+omegaconf>=2.3
+scikit-learn>=1.6
+onnxruntime>=1.20
+audioseal>=0.2          # the inaudible AI watermark (dacts/marking.py)
+descript-audio-codec>=1.0
+descript-audiotools>=0.7
+pyloudnorm>=0.1
+pyworld>=0.3
+num2words>=0.5.14       # numbers in words, all languages
+pypinyin>=0.53          # Chinese
+pyopenjtalk-plus>=0.4   # Japanese
+sudachipy>=0.6          # Japanese
+sudachidict-core
+faster-whisper>=1.1     # transcribing references and training data
+tqdm
+tensorboard             # training curves

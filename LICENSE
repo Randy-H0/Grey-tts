@@ -1,0 +1,73 @@
+Grey and Grey Studio
+====================
+
+Grey is a text-to-speech model; Grey Studio is its desktop app. Both are made in the Netherlands by the people behind
+thisvoiceisai.com. Contact: support@thisvoiceisai.com
+
+
+1. Free for non-commercial use
+------------------------------
+Grey's code (this repository), the Grey models and Grey Studio are free for personal, non-commercial use: making speech for yourself, your own
+projects and videos that aren't sold or paid for, research and learning. Commercial use (selling the speech, using it
+in a paid product or service, or in advertising) is not allowed. Part of the speech data Grey learned from (the Emilia
+dataset, CC BY-NC 4.0) and some of the voices only allow non-commercial use, so the models are licensed the same way.
+You may change the code and share your changes under these same terms. You may not sell the code, Grey Studio or
+the models, or offer them as a paid service.
+
+
+2. Speech made with Grey is AI-generated: say so
+------------------------------------------------
+Everything Grey Studio and grey.py save is marked as AI-generated in two ways (dacts/marking.py), as the EU AI Act (Regulation (EU) 2024/1689,
+article 50) asks of AI systems that make synthetic audio: a label inside the audio file, and an inaudible watermark in
+the sound itself. Don't remove or hide them, and keep them in software you build on this code.
+If you publish or share speech made with Grey, make clear it is AI-generated. That is your duty under the same law
+(article 50(4)) when the speech could be taken for a real person, and it is always the fair thing to do. Never pass
+Grey's speech off as a real recording.
+
+
+3. Be fair with voices
+----------------------
+- A person's voice is personal data. Only clone or train voices that are your own, or that you have the speaker's
+  permission for. For anyone under 16, a parent or guardian must agree.
+- Don't use Grey to pretend to be a real person, to mislead people, to harass or defame anyone, for fraud, or for
+  anything else that is against the law.
+- Some built-in voices come with their own rules, which apply when you use them: Tsukuyomi-chan (© Rei Yumesaki) may
+  not be used to criticise or attack people, to campaign for political or religious views, or for explicit content,
+  and needs the credit "Grey:つくよみちゃん". The full list of credits and the speech data Grey learned from:
+  https://thisvoiceisai.com/terms.html#credits (also: Grey Studio > Settings > Credits).
+- Report misuse to support@thisvoiceisai.com.
+
+
+4. Your privacy
+---------------
+Grey Studio works on your computer. Your text, your recordings, your voices, your takes and your trained models stay
+on it: nothing of them is sent anywhere. Grey Studio only connects to thisvoiceisai.com to:
+- check now and then whether a newer version exists, and download it (you can switch this off: Settings > Updates),
+- download the voice models you choose on the Models page.
+Those requests show thisvoiceisai.com and its network provider Cloudflare your IP address and the Grey Studio version
+number, like any download does. Our server doesn't record them. There is no account, no tracking and no telemetry. More:
+https://thisvoiceisai.com/privacy.html
+If you make voices of other people, you are the one handling their personal data: ask for their permission and delete
+their voice when they ask you to (Voices > the bin).
+
+
+5. No warranty, liability
+-------------------------
+Grey Studio is free and provided "as is", without warranty: it may make mistakes, mispronounce words or stop working.
+To the extent the law allows, we are not liable for damage caused by using it; this doesn't limit liability for intent
+or gross negligence, or any rights you have as a consumer that can't be set aside. You are responsible for what you
+make and publish with it.
+
+
+6. Law
+------
+Dutch law applies to these terms. If you are a consumer, the mandatory protections of the country you live in still
+apply to you.
+
+
+7. Third-party software
+-----------------------
+Grey Studio includes Python (PSF License), PyTorch (BSD), Hugging Face Transformers (Apache 2.0), faster-whisper
+(MIT) with OpenAI Whisper weights (MIT), XLM-RoBERTa (MIT), KVAE-Audio, WavLM (MIT), AudioSeal (MIT), the audEERING
+emotion model (CC BY-NC-SA 4.0) and other open-source libraries, each under its own licence (see the licence files
+inside python/Lib/site-packages).

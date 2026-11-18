@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://the developer-h0.github.io/Grey-tts/"><img src="https://img.shields.io/badge/🎧_listen-samples-d8322e?style=for-the-badge" alt="Listen to samples"></a>
+  <a href="https://randy-h0.github.io/Grey-tts/"><img src="https://img.shields.io/badge/🎧_listen-samples-d8322e?style=for-the-badge" alt="Listen to samples"></a>
   <a href="https://thisvoiceisai.com"><img src="https://img.shields.io/badge/🌐_try_it-in_your_browser-1f2a44?style=for-the-badge" alt="Try it in your browser"></a>
   <a href="https://thisvoiceisai.com/download/"><img src="https://img.shields.io/badge/💻_Grey_Studio-Windows_app-5b6478?style=for-the-badge" alt="Grey Studio for Windows"></a>
 </p>
@@ -30,7 +30,7 @@ This repository is the model, inference, training and a command line. Don't want
 
 All samples come from **Grey v16+** with its made-up voices Jonas, Lena and Daan (no real people), made on a CPU.
 First takes, except Spanish and Chinese: those had a word slip, so they're the next take that read every word right.
-▶️ **[Open the samples page](https://the developer-h0.github.io/Grey-tts/)** to play them in your browser, or click a file below.
+▶️ **[Open the samples page](https://randy-h0.github.io/Grey-tts/)** to play them in your browser, or click a file below.
 
 | | Language | Grey says… | |
 |---|---|---|---|

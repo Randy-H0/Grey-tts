@@ -21,7 +21,11 @@ SKIP = ("ada",)  # (the per-block AdaLN modulation reads the global condition: l
 
 
 def _forward(self, x):
-    y = F.linear(x, self.weight, self.bias)
+    w, bias = self.weight, self.bias
+    if w.dtype != x.dtype:  # (frozen weights kept in bf16: half_frozen; fp32 inputs, e.g. sampling outside autocast)
+        w = w.to(x.dtype)
+        bias = None if bias is None else bias.to(x.dtype)
+    y = F.linear(x, w, bias)
     a = self.lora_A.to(x.dtype)
     b = self.lora_B.to(x.dtype)
     return y + F.linear(F.linear(x, a), b) * self.lora_scale
@@ -50,6 +54,19 @@ def add(model: nn.Module, rank: int = 16, alpha: float = 16.0, targets=DEFAULT_T
         m.forward = types.MethodType(_forward, m)
         names += [f"{name}.lora_A", f"{name}.lora_B"]
     return names
+
+
+def half_frozen(model: nn.Module, dtype=torch.bfloat16) -> int:
+    """(11-18, you: "optimize") The adapted layers' frozen weights stored in bf16: training multiplies them in bf16
+    anyway (autocast), so the maths is the same and their memory halves (~0.6 GB on a v16+ decoder). -> weights converted"""
+    n = 0
+    for _, m in model.named_modules():
+        if isinstance(m, nn.Linear) and hasattr(m, "lora_A") and not m.weight.requires_grad:
+            m.weight.data = m.weight.data.to(dtype)
+            if m.bias is not None and not m.bias.requires_grad:
+                m.bias.data = m.bias.data.to(dtype)
+            n += m.weight.numel()
+    return n
 
 
 def freeze_for_lora(model: nn.Module, also=("global_cond.spk.weight",)) -> tuple:
@@ -81,11 +98,57 @@ def merge(model: nn.Module) -> int:
 
 
 def merge_sd(sd: dict, scale: float) -> dict:
-    """The same on a state dict: base weights + `.lora_A/B` -> merged weights, no adapters."""
+    """The same on a state dict: base weights + `.lora_A/B` -> merged weights, no adapters (+ the voice rows folded)."""
+    sd = fold_voice_rows(sd)
     out = {k: v for k, v in sd.items() if ".lora_" not in k}
     for k in [k for k in sd if k.endswith(".lora_A")]:
         base = k[: -len(".lora_A")]
         A, B = sd[k].float(), sd[base + ".lora_B"].float()
         w = out[base + ".weight"]
         out[base + ".weight"] = (w.float() + B @ A * scale).to(w.dtype)
+    return out
+
+
+# ---------------------------------------------------------------- the new voices' rows only (11-18)
+# (you 11-18: "remove the voice table") A LoRA fine-tune used to train the WHOLE voice table (~466k rows, ~120M weights:
+# gradients + AdamW state ~1.5 GB) to fit one or two new voices. Now the table stays frozen and each trained voice gets
+# one small row of its own (`voice_delta`), added on lookup. Snapshots fold it back into the table (fold_voice_rows), so
+# every file outside training looks exactly as before.
+DELTA, IDS = "global_cond.spk.voice_delta", "global_cond.spk.voice_ids"
+
+
+def _emb_forward(self, idx):
+    out = F.embedding(idx, self.weight)
+    slot = self.voice_slot[idx.clamp(min=0)]  # (-1: not a trained voice)
+    hit = slot >= 0
+    if bool(hit.any()):
+        add = torch.zeros_like(out)
+        add[hit] = self.voice_delta[slot[hit]].to(out.dtype)
+        out = out + add
+    return out
+
+
+def voice_rows(model: nn.Module, ids) -> int:
+    """Frozen table + a trainable row for each voice id in `ids`. Returns the number of rows."""
+    emb = model.global_cond.spk
+    ids = sorted({int(i) for i in ids})
+    dev = emb.weight.device
+    emb.voice_delta = nn.Parameter(torch.zeros(len(ids), emb.weight.shape[1], device=dev))
+    emb.register_buffer("voice_ids", torch.tensor(ids, dtype=torch.long, device=dev))
+    slot = torch.full((emb.weight.shape[0],), -1, dtype=torch.long, device=dev)
+    slot[emb.voice_ids] = torch.arange(len(ids), device=dev)
+    emb.register_buffer("voice_slot", slot, persistent=False)
+    emb.weight.requires_grad_(False)
+    emb.forward = types.MethodType(_emb_forward, emb)
+    return len(ids)
+
+
+def fold_voice_rows(sd: dict) -> dict:
+    """A state dict with `voice_delta` -> the plain one: the rows added into the table, the extra keys gone."""
+    if DELTA not in sd:
+        return sd
+    out = {k: v for k, v in sd.items() if k not in (DELTA, IDS)}
+    w = out["global_cond.spk.weight"].clone()
+    w[sd[IDS].long()] += sd[DELTA].to(w.dtype)
+    out["global_cond.spk.weight"] = w
     return out

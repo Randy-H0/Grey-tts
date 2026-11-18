@@ -155,7 +155,8 @@ python train.py --data data/my_set --out runs/my_run --init models/v16plus.pt lo
 ```
 
 `train.py` takes any setting of `dacts/config.py` as `key=value` (`--resume` continues a run in `--out`). A LoRA
-fine-tune of a few speakers (`lora_rank=16`, `grad_ckpt=True`) fits a 6-8 GB GPU.
+fine-tune of a few speakers (`lora_rank=16`, `grad_ckpt=True`) needs about 3 GB of GPU memory at a 3000-frame batch
+(v16+): only the adapters and the new voices' own rows train, the frozen weights sit in bf16, and there's no weight average.
 
 <details>
 <summary>📁 <b>What's where</b></summary>

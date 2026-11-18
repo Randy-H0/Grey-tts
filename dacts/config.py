@@ -73,6 +73,7 @@ class Config:
     lora_lr_mult: float = 20.0  # adapters can take a much higher rate than full weights (the base can't drift)
     lora_top_blocks: int = 0  # (11-17) adapters only on the top N decoder blocks (0 = all): with the voice rows frozen,
     # the backward pass stops at the lowest adapted block -- faster steps, less memory
+    lora_bf16_base: bool = True  # (11-18) the adapted layers' frozen weights in bf16 (same maths under autocast, half the memory)
     lora_train_voice: bool = True  # the new voices' table rows train too (False: they stay at their zero-shot start)
     grad_ckpt: bool = False  # decoder blocks recompute their activations in the backward pass (much less memory, ~25 % slower)
     lang_lr_mult: float = 1.0

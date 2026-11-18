@@ -447,8 +447,16 @@ def main():
     if getattr(cfg, "lora_rank", 0) > 0:  # (11-17) LoRA fine-tune: adapters on the decoder, everything else frozen
         from dacts import lora as LORA
         _ln = LORA.add(model, cfg.lora_rank, cfg.lora_alpha, LORA.top_blocks(model, getattr(cfg, "lora_top_blocks", 0)))
-        _tr, _tot = LORA.freeze_for_lora(model, ("global_cond.spk.weight",) if getattr(cfg, "lora_train_voice", True) else ())
-        print(f"LoRA rank {cfg.lora_rank}: {len(_ln) // 2} adapted layers, {_tr / 1e6:.1f}M of {_tot / 1e6:.1f}M weights train", flush=True)
+        # (11-18, you: "remove the voice table") only the trained voices' own rows learn, not the whole ~466k-row table
+        _own = [x for x in str(cfg.only_speakers or "").split(",") if x] or             sorted({i.get("spk_name") for i in (items or []) if i.get("spk_name")})
+        _vids = [speakers[n] for n in _own if n in speakers]
+        _rows = LORA.voice_rows(model, _vids) if (_vids and getattr(cfg, "lora_train_voice", True)) else 0
+        _tr, _tot = LORA.freeze_for_lora(model, (LORA.DELTA,) if _rows else
+                                         (("global_cond.spk.weight",) if getattr(cfg, "lora_train_voice", True) else ()))
+        if getattr(cfg, "lora_bf16_base", True) and str(dev).startswith("cuda"):
+            print(f"LoRA: {LORA.half_frozen(model) / 1e6:.0f}M frozen weights stored in bf16", flush=True)
+        print(f"LoRA rank {cfg.lora_rank}: {len(_ln) // 2} adapted layers, {_rows} voice rows of their own (table frozen), "
+              f"{_tr / 1e6:.1f}M of {_tot / 1e6:.1f}M weights train", flush=True)
     text_lm = None
     if cfg.lm_name:  # frozen multilingual LM (not saved in checkpoints)
         from dacts.lm import TextLM
@@ -456,7 +464,10 @@ def main():
         cfg.lm_dim = text_lm.dim
         if cfg.compile:  # 2026-10-30: eager it is ~300 small kernels every step (frozen, fp16: compiled, same maths)
             text_lm.enable_fast()
-    ema = copy.deepcopy(model).eval().requires_grad_(False)
+    # (11-18, you: "remove ... and optimize") no weight average in LoRA runs: a second full copy of the model (+ a CPU
+    # thread averaging it) for adapters that don't need it -- the trained weights themselves are saved and sampled
+    no_ema = getattr(cfg, "lora_rank", 0) > 0
+    ema = model if no_ema else copy.deepcopy(model).eval().requires_grad_(False)
     ema_params, model_params = list(ema.parameters()), list(model.parameters())
     n_enc = sum(p.numel() for p in model.encoder.parameters()) / 1e6
     n_dec = sum(p.numel() for p in model.decoder.parameters()) / 1e6
@@ -657,6 +668,12 @@ def main():
     except (OSError, ValueError):
         heard = {"clips_s": 0.0, "prompts_s": 0.0, "steps": 0, "since_step": step}
 
+    def _plain(sd):  # (11-18) LoRA's own voice rows folded into the table: snapshots look as before
+        if getattr(cfg, "lora_rank", 0) > 0:
+            from dacts import lora as LORA
+            return LORA.fold_voice_rows(sd)
+        return sd
+
     def save():
         if ema_cpu is not None:
             ema_cpu.join()
@@ -666,14 +683,14 @@ def main():
                     **({"head_opt": head_opt.state_dict(), "head_sched": head_sched.state_dict()} if head_opt else {})},
                    ck_path)
         if Path("models").is_dir() and not args.ckpt_dir:  # project's models/ folder: what the website loads
-            w = {k: (v.half() if v.is_floating_point() else v) for k, v in ema.state_dict().items()}
+            w = {k: (v.half() if v.is_floating_point() else v) for k, v in _plain(ema.state_dict()).items()}
             tmp = Path("models") / f"{out.name}.tmp"
             torch.save({"model": w, "ema": w, "step": step, "cfg": cfg.to_dict(), "latent": latent.state(),
                         "speakers": speakers, "conditioning": conditioning, "speaker_langs": speaker_langs,
                         "source": str(ck_path)}, tmp)
             tmp.replace(Path("models") / f"{out.name}.pt")
         if cfg.keep_ckpts and (not getattr(cfg, "keep_every", 0) or step % cfg.keep_every == 0):  # small snapshot to listen to / promote later (no optimizer, fp16 EMA weights)
-            w = {k: (v.half() if v.is_floating_point() else v) for k, v in ema.state_dict().items()}
+            w = {k: (v.half() if v.is_floating_point() else v) for k, v in _plain(ema.state_dict()).items()}
             torch.save({"model": w, "ema": w, "step": step, "cfg": cfg.to_dict(), "latent": latent.state(),
                         "speakers": speakers, "conditioning": conditioning, "speaker_langs": speaker_langs},
                        ck_dir / f"step_{step:06d}.pt")
@@ -751,7 +768,7 @@ def main():
         from dacts.ahead import Ahead
         print("VTV targets: one batch ahead on a second thread (VTV_AHEAD=1)", flush=True)
     ema_cpu = None
-    if torch.cuda.is_available() and int(os.environ.get("EMA_CPU", "50")) > 0:
+    if torch.cuda.is_available() and int(os.environ.get("EMA_CPU", "50")) > 0 and not no_ema:
         ema_cpu = CpuAverage(ema, model_params, int(os.environ.get("EMA_CPU", "50")))
         torch.cuda.empty_cache()
         print(f"weight average: in system RAM, updated every {ema_cpu.every} steps (EMA_CPU)", flush=True)
@@ -1013,7 +1030,9 @@ def main():
                 _st(f"step {step} done (critic {'yes' if getattr(model, '_critic_now', False) else 'no'})")
 
             d = min(cfg.ema, (1 + step) / (10 + step))
-            if ema_cpu is not None:
+            if no_ema:
+                pass
+            elif ema_cpu is not None:
                 if step % ema_cpu.every == 0:
                     ema_cpu.update(1 - d ** ema_cpu.every)
             else:

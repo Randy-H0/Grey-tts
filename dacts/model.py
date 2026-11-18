@@ -1374,7 +1374,7 @@ class DacTTS(nn.Module):
                    whisper_guidance=1.0, band_guidance=1.0, lang_guidance=1.0, style_transfer=0.0, apg=None,
                    target_len=None, len_quantum=None, notes=None, word_frames=None, word_ids=None,
                    word_vowels=None, note_guidance=1.0, prompt_labels=None, emph_stretch=0.0, word_ms=None,
-                   word_tok=None, durations_only=False, align_to=None, start_t=None, record=None, ref_seg=None,
+                   word_tok=None, durations_only=False, align_to=None, start_t=None, record=None, ref_seg=None, short_fix=True,
                    cfg_from=0.0, prompt_guidance_from=0.0, anti_voice=0.0,
                    np_drop_pe=False, guid_w=None):
         """Returns normalized latents (B, Ty*patch, latent_dim) and frame lengths.
@@ -1476,9 +1476,27 @@ class DacTTS(nn.Module):
         dur_sample = ((lambda h_, m_: rhythm.sample(h_, m_, steps=10, temperature=dur_temperature, g=g, tokens=tokens, lm=lm,
                                                     emph=emph, pctx=pctx, tlab=tlab)) if rhythm is not None
                       else (lambda h_, m_: self.encoder.dur.sample(h_, m_, steps=10, temperature=dur_temperature)))
+        def tame(dc):  # (11-18, you: "grey doesn't handle short words, 1-3 well") one-word lines are rare in training, so the
+            # rhythm model gives them absurd lengths ("No." 3-6 s, one sound 40-110 frames) and the decoder fills the time
+            # with made-up talk. Short lines only (<= 30 tokens of new text): no sound longer than 25 frames, and the
+            # line no slower than 7 frames per token (normal speech: 3-7). Longer lines are never touched.
+            if not short_fix:
+                return dc
+            n0 = int(prompt["n_tok"]) if prompt is not None else 0
+            dc = dc.clone()
+            for b_ in range(dc.shape[0]):
+                n_new = int(x_mask[b_].sum()) - n0
+                if n_new <= 0 or n_new > 30:
+                    continue
+                seg = dc[b_, n0:n0 + n_new].clamp(max=25.0 * length_scale)
+                cap = 7.0 * n_new * length_scale
+                if float(seg.sum()) > cap:
+                    seg = seg * (cap / float(seg.sum()))
+                dc[b_, n0:n0 + n_new] = seg
+            return dc
         if durations is None:
             logw = dur_sample(h, x_mask)
-            dur_cont = torch.expm1(logw.float()).clamp(min=0) * length_scale * x_mask
+            dur_cont = tame(torch.expm1(logw.float()).clamp(min=0) * length_scale * x_mask)
             durations = torch.round(dur_cont)
         tp = 0
         plain_enc = None  # encoder output without the prompt's prosody (pctx), when that was given
@@ -1504,7 +1522,7 @@ class DacTTS(nn.Module):
                 mu_x, h = encoder(tokens, x_mask, g, lm, emph=emph, pctx=pctx, tlab=tlab)
                 if dur_cont is not None:  # new durations from the informed encoder
                     logw = dur_sample(h, x_mask)
-                    dur_cont = torch.expm1(logw.float()).clamp(min=0) * length_scale * x_mask
+                    dur_cont = tame(torch.expm1(logw.float()).clamp(min=0) * length_scale * x_mask)
                     durations = torch.round(dur_cont)
             timing = float(prompt.get("timing", 0.0)) if align_to is None else 0.0  # (teacher-forced: real timing)
             if timing > 0:  # speak at the prompt's pace: the duration predictor never sees the prompt audio,

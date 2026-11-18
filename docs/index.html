@@ -52,13 +52,15 @@ const NAMES={lib_jonas:"Jonas",lib_lena:"Lena",lib_daan:"Daan"};
 fetch("samples/samples.json").then(r=>r.json()).then(list=>{
   for(const s of list){
     const [flag,label]=INFO[s.id]||["🔊",s.id];
-    const c=document.createElement("div");c.className="card";
+    const c=document.createElement("div");c.className="card";c.id=s.id;
     c.innerHTML='<div class="top"><span class="flag"></span><span class="lang"></span><span class="voice"></span></div><p class="text"></p><audio controls preload="none"></audio>';
     c.querySelector(".flag").textContent=flag;c.querySelector(".lang").textContent=label;
     c.querySelector(".voice").textContent=(NAMES[s.voice]||s.voice)+" · "+s.seconds+" s";
     c.querySelector(".text").textContent=s.text;c.querySelector("audio").src="samples/"+s.id+".mp3";
     document.getElementById(s.id.includes("_")?"styles":"langs").appendChild(c);
   }
+  const h=location.hash.slice(1),el=h&&document.getElementById(h);
+  if(el){el.scrollIntoView({block:"center"});el.style.outline="3px solid var(--acc)";const a=el.querySelector("audio");a.play().catch(()=>{});}
 });
 </script>
 </body>

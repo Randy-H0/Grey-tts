@@ -30,24 +30,24 @@ This repository is the model, inference, training and a command line. Don't want
 
 All samples come from **Grey v16+** with its made-up voices Jonas, Lena and Daan (no real people), made on a CPU.
 First takes, except Spanish and Chinese: those had a word slip, so they're the next take that read every word right.
-▶️ **[Open the samples page](https://randy-h0.github.io/Grey-tts/)** to play them in your browser, or click a file below.
+▶️ **[Open the samples page](https://randy-h0.github.io/Grey-tts/)** to play them in your browser.
 
 | | Language | Grey says… | |
 |---|---|---|---|
-| 🇬🇧 | English | *Hi, I'm Grey! I'm named after a parrot that never stops talking, so, fair warning.* | [▶️ en.mp3](docs/samples/en.mp3) |
-| 🇩🇪 | German | *Guten Morgen! Der Kaffee ist fertig, und ich habe heute erstaunlich gute Laune.* | [▶️ de.mp3](docs/samples/de.mp3) |
-| 🇳🇱 | Dutch | *Het regent alweer in Amsterdam, maar eerlijk gezegd vind ik dat best gezellig.* | [▶️ nl.mp3](docs/samples/nl.mp3) |
-| 🇫🇷 | French | *Bonjour ! Je peux lire ce texte avec plaisir, même si la phrase est un peu longue.* | [▶️ fr.mp3](docs/samples/fr.mp3) |
-| 🇪🇸 | Spanish | *¡Hola! Hoy hace un día precioso para salir a pasear por la playa.* | [▶️ es.mp3](docs/samples/es.mp3) |
-| 🇵🇱 | Polish | *Dzień dobry! Chciałbym zamówić dużą pizzę z podwójnym serem, poproszę.* | [▶️ pl.mp3](docs/samples/pl.mp3) |
-| 🇺🇦 | Ukrainian | *Привіт! Сьогодні чудовий день, щоб вивчити щось нове.* | [▶️ uk.mp3](docs/samples/uk.mp3) |
-| 🇯🇵 | Japanese | *こんにちは！今日はとてもいい天気ですね。散歩に行きませんか？* | [▶️ ja.mp3](docs/samples/ja.mp3) |
-| 🇨🇳 | Chinese | *你好！我是一个会说十种语言的语音模型，很高兴认识你。* | [▶️ zh.mp3](docs/samples/zh.mp3) |
-| 🇰🇷 | Korean | *안녕하세요! 오늘 저녁에 같이 맛있는 거 먹으러 갈래요?* | [▶️ ko.mp3](docs/samples/ko.mp3) |
-| 🤫 | Whisper | *Shh. Don't tell anyone, but I can whisper too.* | [▶️ en_whisper.mp3](docs/samples/en_whisper.mp3) |
-| ⚡ | Fast | *And when I'm in a hurry, I can talk really, really fast without tripping over my words.* | [▶️ en_fast.mp3](docs/samples/en_fast.mp3) |
-| 🐢 | Slow | *Or I can take my time... and say every word... slowly.* | [▶️ en_slow.mp3](docs/samples/en_slow.mp3) |
-| 🎭 | Acting | *No way! You actually did it? That's the best news I've heard all week!* | [▶️ en_acting.mp3](docs/samples/en_acting.mp3) |
+| 🇬🇧 | English | *Hi, I'm Grey! I'm named after a parrot that never stops talking, so, fair warning.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#en) |
+| 🇩🇪 | German | *Guten Morgen! Der Kaffee ist fertig, und ich habe heute erstaunlich gute Laune.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#de) |
+| 🇳🇱 | Dutch | *Het regent alweer in Amsterdam, maar eerlijk gezegd vind ik dat best gezellig.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#nl) |
+| 🇫🇷 | French | *Bonjour ! Je peux lire ce texte avec plaisir, même si la phrase est un peu longue.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#fr) |
+| 🇪🇸 | Spanish | *¡Hola! Hoy hace un día precioso para salir a pasear por la playa.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#es) |
+| 🇵🇱 | Polish | *Dzień dobry! Chciałbym zamówić dużą pizzę z podwójnym serem, poproszę.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#pl) |
+| 🇺🇦 | Ukrainian | *Привіт! Сьогодні чудовий день, щоб вивчити щось нове.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#uk) |
+| 🇯🇵 | Japanese | *こんにちは！今日はとてもいい天気ですね。散歩に行きませんか？* | [▶️ play](https://randy-h0.github.io/Grey-tts/#ja) |
+| 🇨🇳 | Chinese | *你好！我是一个会说十种语言的语音模型，很高兴认识你。* | [▶️ play](https://randy-h0.github.io/Grey-tts/#zh) |
+| 🇰🇷 | Korean | *안녕하세요! 오늘 저녁에 같이 맛있는 거 먹으러 갈래요?* | [▶️ play](https://randy-h0.github.io/Grey-tts/#ko) |
+| 🤫 | Whisper | *Shh. Don't tell anyone, but I can whisper too.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#en_whisper) |
+| ⚡ | Fast | *And when I'm in a hurry, I can talk really, really fast without tripping over my words.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#en_fast) |
+| 🐢 | Slow | *Or I can take my time... and say every word... slowly.* | [▶️ play](https://randy-h0.github.io/Grey-tts/#en_slow) |
+| 🎭 | Acting | *No way! You actually did it? That's the best news I've heard all week!* | [▶️ play](https://randy-h0.github.io/Grey-tts/#en_acting) |
 
 ## ✨ What it can do
 

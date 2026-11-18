@@ -84,6 +84,8 @@ def _fw(device):
     """(Grey Studio, 11-17) faster-whisper large-v3-turbo -- the copy the Train tab already ships -- instead of the
     transformers copy of the same model: one 1.6 GB recogniser in the download, not two. fp32 + beam 5 as below."""
     if "fw" not in _asr:
+        from dacts.cuda_dlls import expose_torch_dlls
+        expose_torch_dlls()  # (11-18: cuBLAS / cuDNN from PyTorch's own folder: PCs without the CUDA toolkit)
         from faster_whisper import WhisperModel
         gpu = str(device).startswith("cuda") and torch.cuda.is_available()
         small = gpu and torch.cuda.get_device_properties(0).total_memory < 10 * 2 ** 30  # (11-17: 4-8 GB cards)

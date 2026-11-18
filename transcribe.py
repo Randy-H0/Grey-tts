@@ -134,6 +134,8 @@ def main():
     ap.add_argument("--model", default="large-v3", help="large-v3-turbo: ~4x faster, ~96%% the same words")
     ap.add_argument("--batch", type=int, default=0, help="> 0: batched inference (long recordings)")
     a = ap.parse_args()
+    from dacts.cuda_dlls import expose_torch_dlls
+    expose_torch_dlls()  # (11-18: cuBLAS / cuDNN from PyTorch's own folder: PCs without the CUDA toolkit)
     from faster_whisper import BatchedInferencePipeline, WhisperModel  # (only needed for transcribing)
 
     model = WhisperModel(a.model, device=a.device, compute_type="float16" if a.device == "cuda" else "int8")

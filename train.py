@@ -676,7 +676,7 @@ def main():
             return LORA.fold_voice_rows(sd)
         return sd
 
-    def save():
+    def save(snap=True):  # snap=False: only the resume point (last.pt), no snapshot file (a stop between snapshots)
         if ema_cpu is not None:
             ema_cpu.join()
         torch.save({"model": model.state_dict(), "ema": ema.state_dict(), "opt": opt.state_dict(),
@@ -691,7 +691,7 @@ def main():
                         "speakers": speakers, "conditioning": conditioning, "speaker_langs": speaker_langs,
                         "source": str(ck_path)}, tmp)
             tmp.replace(Path("models") / f"{out.name}.pt")
-        if cfg.keep_ckpts and (not getattr(cfg, "keep_every", 0) or step % cfg.keep_every == 0):  # small snapshot to listen to / promote later (no optimizer, fp16 EMA weights)
+        if snap and cfg.keep_ckpts and (not getattr(cfg, "keep_every", 0) or step % cfg.keep_every == 0):  # small snapshot to listen to / promote later (no optimizer, fp16 EMA weights)
             w = {k: (v.half() if v.is_floating_point() else v) for k, v in _plain(ema.state_dict()).items()}
             torch.save({"model": w, "ema": w, "step": step, "cfg": cfg.to_dict(), "latent": latent.state(),
                         "speakers": speakers, "conditioning": conditioning, "speaker_langs": speaker_langs},
@@ -1243,6 +1243,16 @@ def main():
                 t0 = time.time()
             if step >= cfg.max_steps:
                 break
+            # (11-18, you: "asap allow people to resume training") a STOP file in the run folder (Grey Studio's Stop button):
+            # save the resume point and end cleanly -- instead of being killed and losing everything since the last save
+            if step % 10 == 0 and (out / "STOP").exists():
+                print(f"stop requested at step {step}: saving so training can resume from here", flush=True)
+                save(snap=False)
+                try:
+                    (out / "STOP").unlink()
+                except OSError:
+                    pass
+                return
     save()
 
 

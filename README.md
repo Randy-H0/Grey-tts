@@ -68,7 +68,8 @@ model has never heard from a short clip, read new text, then count word errors a
 
 | Model | Size | EN word errors ↓ | EN voice match ↑ | ZH word errors ↓ | ZH voice match ↑ |
 |---|---|---|---|---|---|
-| **Grey v15+** | 489M | 2.44 % | 0.65 | **0.81 %** | 0.74 |
+| **Grey v16+** ⭐ | 489M | 2.16 % | 0.65 | **0.76 %** | 0.73 |
+| **Grey v15+** | 489M | 2.44 % | 0.65 | 0.81 % | 0.74 |
 | **Grey v15+ · Enhance voice** | 489M | 2.49 % | 0.67 | 1.47 % | 0.76 |
 | F5-TTS | 336M | **1.83 %** | 0.65 | 1.56 % | 0.74 |
 | E2 TTS | 333M | 2.19 % | **0.71** | 1.97 % | 0.73 |
@@ -80,9 +81,10 @@ model has never heard from a short clip, read new text, then count word errors a
 | CosyVoice | 300M | 4.29 % | 0.61 | 3.63 % | 0.72 |
 | *Real recordings* | | *2.14 %* | *0.73* | *1.25 %* | *0.75* |
 
-Grey measured on the **full** test sets (test-en, test-zh) with the official scorers; the other numbers come from each
-model's own paper on the same sets. v16+ hasn't been through the full benchmark yet. "Enhance voice" is a second pass
-that re-clones from the first take (in Grey Studio and on the website).
+Grey is measured with the official scorers on 408 clips of test-en and 200 of test-zh (the same clips for every Grey
+version). The other numbers come from each model's own paper on the full sets. "Enhance voice" is a second pass that
+re-clones from the first take (in Grey Studio and on the website). v16+ was also checked on Ukrainian: voice match 0.59,
+word errors 14.5 % (real recordings: 0.68 and 12.6 %).
 
 ## 🚀 Quick start
 

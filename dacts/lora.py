@@ -26,6 +26,8 @@ def _forward(self, x):
         w = w.to(x.dtype)
         bias = None if bias is None else bias.to(x.dtype)
     y = F.linear(x, w, bias)
+    if not getattr(self, "lora_on", True):  # (11-18) a switched branch (singing): off = exactly the base layer
+        return y
     a = self.lora_A.to(x.dtype)
     b = self.lora_B.to(x.dtype)
     return y + F.linear(F.linear(x, a), b) * self.lora_scale
@@ -152,3 +154,13 @@ def fold_voice_rows(sd: dict) -> dict:
     w[sd[IDS].long()] += sd[DELTA].to(w.dtype)
     out["global_cond.spk.weight"] = w
     return out
+
+
+def set_branch(model: nn.Module, on: bool) -> int:
+    """(11-18) Switch every adapter on / off (the singing branch: on only for requests with notes). -> adapters switched"""
+    n = 0
+    for _, m in model.named_modules():
+        if isinstance(m, nn.Linear) and hasattr(m, "lora_A"):
+            m.lora_on = bool(on)
+            n += 1
+    return n

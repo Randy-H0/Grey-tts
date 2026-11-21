@@ -100,10 +100,42 @@ class KVAELatent(nn.Module):
         return z * self.std + self.mean
 
 
+KVAE_WHOLE = 1200  # frames (~24 s): takes up to this long decode in one piece, exactly as before
+KVAE_PIECE, KVAE_CTX, KVAE_XF = 800, 64, 8  # longer: 800-frame pieces, 64 frames of context each side, 2x8-frame crossfade
+
+
+def _kvae_decode(kvae_model, lat: torch.Tensor) -> torch.Tensor:
+    """(11-21, you: "work on 4gb vram") a one-minute song decoded whole asked a 4 GB card for 3.5 GB + 460 MB more: long
+    latents decode in overlapping pieces (each with context around it, joined by a short linear crossfade whose two
+    ramps add up to 1). (B, T, 64) -> (B, N) at 48 kHz."""
+    T = lat.shape[1]
+    if T <= KVAE_WHOLE:
+        return kvae_model.decode(lat.transpose(1, 2).float())[:, 0]
+    out = None
+    for s in range(0, T, KVAE_PIECE):
+        e = min(T, s + KVAE_PIECE)
+        ks, ke = max(0, s - KVAE_XF), min(T, e + KVAE_XF)  # kept, overlapping the neighbours by 2 * XF frames
+        a0, b0 = max(0, ks - KVAE_CTX), min(T, ke + KVAE_CTX)
+        y = kvae_model.decode(lat[:, a0:b0].transpose(1, 2).float())[:, 0]
+        spf = y.shape[-1] // (b0 - a0)
+        if out is None:
+            out = torch.zeros(y.shape[0], T * spf, device=y.device, dtype=y.dtype)
+        seg = y[:, (ks - a0) * spf:(ke - a0) * spf]
+        w = torch.ones(seg.shape[-1], device=y.device, dtype=y.dtype)
+        n = 2 * KVAE_XF * spf
+        if ks > 0:
+            w[:n] = torch.linspace(0, 1, n + 2, device=y.device, dtype=y.dtype)[1:-1]
+        if ke < T:
+            w[-n:] = torch.linspace(1, 0, n + 2, device=y.device, dtype=y.dtype)[1:-1]
+        out[:, ks * spf:ks * spf + seg.shape[-1]] += seg * w
+        del y
+    return out
+
+
 @torch.no_grad()
 def kvae_to_audio(kvae_model, latents: torch.Tensor) -> torch.Tensor:
     """latents (B, T, 64) un-normalized -> audio (B, N) at 44.1 kHz (decoded at 48 kHz, resampled)."""
-    a = kvae_model.decode(latents.transpose(1, 2).float())[:, 0]
+    a = _kvae_decode(kvae_model, latents)
     # KVAE's decoder adds a steady tone at ~20.1 kHz (+35-45 dB, on every clip): cut everything above
     # 19.5 kHz with a short raised-cosine edge before resampling (nothing audible lives up there).
     # The FFT runs at the next power of two: every take has its own length, and cuFFT planning an odd length took

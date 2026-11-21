@@ -482,6 +482,32 @@ class PromptLabels(nn.Module):
         return self.net(x.to(w.dtype)) * has[:, None].to(w.dtype)
 
 
+NOTE_PERIODS = (0.5, 1.0, 2.0, 4.0, 6.0, 12.0, 24.0, 48.0)  # semitones (12: the note name, 24 / 48: the register)
+NOTE_FEATS = 2 * len(NOTE_PERIODS) + 3
+BEAT_FEATS = 9  # (P4, Solver 11-19) beat track per frame: sin/cos beat, sin/cos subdivision, sin/cos two beats, log2(bpm/100), triple, known
+TECHNIQUES = ("Control", "Breathy", "Glissando", "Falsetto", "Mixed_Voice", "Pharyngeal", "Vibrato")  # (11-19) singing style, one-hot
+TECH_FEATS = len(TECHNIQUES)
+
+
+def note_features(notes, n_in=None):
+    """(11-18, Solver) note track (B, T, 4) [(MIDI - 60) / 24, sung, onset, known] -> (B, T, 19): sin / cos of the pitch in
+    semitones at NOTE_PERIODS (zero where nothing is sung) + the sung / onset / known flags. One scalar made neighbouring
+    semitones 0.042 apart -- the singing branch learned the contour (r 0.67) but missed the note by ~1.7 semitones."""
+    st = notes[..., 0].float() * 24.0
+    sung = notes[..., 1:2].float()
+    per = torch.tensor(NOTE_PERIODS, device=notes.device, dtype=torch.float32)
+    ang = 2 * math.pi * st[..., None] / per
+    out = torch.cat([torch.sin(ang) * sung, torch.cos(ang) * sung, notes[..., 1:4].float()], -1)
+    if n_in is not None and n_in >= NOTE_FEATS + BEAT_FEATS:  # (P4) the beat track rides after the 4 note columns
+        beat = notes[..., 4:4 + BEAT_FEATS].float() if notes.shape[-1] >= 4 + BEAT_FEATS else out.new_zeros(*out.shape[:-1], BEAT_FEATS)
+        out = torch.cat([out, beat], -1)
+    if n_in is not None and n_in == NOTE_FEATS + BEAT_FEATS + TECH_FEATS:  # (11-19) + the singing style (one-hot; zeros = unknown)
+        a = 4 + BEAT_FEATS
+        tech = notes[..., a:a + TECH_FEATS].float() if notes.shape[-1] >= a + TECH_FEATS else out.new_zeros(*out.shape[:-1], TECH_FEATS)
+        out = torch.cat([out, tech], -1)
+    return out
+
+
 PCTX_DIM = 6  # [log length, pitch, pitch movement, voiced share, loudness, known]
 
 
@@ -598,7 +624,9 @@ class FlowDecoder(nn.Module):
             nn.init.zeros_(self.clab_in.weight)
         self.note_in = None
         if getattr(cfg, "use_notes", False):  # notes: [pitch, sung, onset, known] per frame, starts with no effect
-            self.note_in = nn.Linear(4, d, bias=False)
+            # (11-18, singing branch) cfg.note_sincos: the pitch as sin / cos features (note_features) instead of one number
+            self.note_in = nn.Linear((NOTE_FEATS if getattr(cfg, "note_sincos", False) else 4) + (BEAT_FEATS if getattr(cfg, "note_beat", False) else 0)
+                                     + (TECH_FEATS if getattr(cfg, "note_tech", False) else 0), d, bias=False)
             nn.init.zeros_(self.note_in.weight)
         self.beat_in = None
         if getattr(cfg, "use_beat", False):  # metronome: beat + bar position per frame (sin/cos), starts with no effect
@@ -651,6 +679,8 @@ class FlowDecoder(nn.Module):
         if beat is not None and self.beat_in is not None:  # (B, T, 4); rows without a tempo are all zero
             h = h + self.beat_in(beat.to(h.dtype))
         if notes is not None and self.note_in is not None:  # (B, T, 4); unknown frames are all zero
+            if self.note_in.in_features != notes.shape[-1] or notes.shape[-1] > 4:
+                notes = note_features(notes, self.note_in.in_features)
             h = h + self.note_in(notes.to(h.dtype))
         c = self.t_mlp(timestep_embedding(t).to(self.t_mlp[0].weight.dtype))
         if g is not None:
@@ -1098,12 +1128,19 @@ class DacTTS(nn.Module):
                     vt = self.vowel_tok[tokens.clamp(min=0, max=self.vowel_tok.shape[0] - 1)].float() * x_mask.float()
                     logp = logp + vp * scale[:, None, None] * vt[:, :, None] * sungf[:, None, :]
             attn = maximum_path(logp, x_mask[:, :, None] & y_mask[:, None, :])  # B, Tx, Ty
+            fd = (hints or {}).get("forced_dur")
+            if fd is not None:  # (11-18, singing branch) stored alignments: each token covers its given frames (no MAS)
+                fd = fd.to(y.device).long() * x_mask.long()
+                ends = fd.cumsum(1)
+                fr = torch.arange(y.shape[1], device=y.device)
+                attn = ((fr[None, None, :] >= (ends - fd)[:, :, None]) & (fr[None, None, :] < ends[:, :, None])
+                        & x_mask[:, :, None] & y_mask[:, None, :]).to(attn.dtype)
 
         dur = attn.sum(-1)
         tm = x_mask if nt is None else x_mask & ~nt[:, None]  # untranscribed rows: no text, no durations to learn
         nfe = None
         if notes is not None and getattr(self.cfg, "use_notes", False):
-            nfe = torch.zeros(y.shape[0], y.shape[1], 4, device=y.device, dtype=torch.float32)
+            nfe = torch.zeros(y.shape[0], y.shape[1], notes.shape[-1], device=y.device, dtype=torch.float32)  # (4, or 4 + beat track)
             n_ = min(nfe.shape[1], notes.shape[1])
             nfe[:, :n_] = notes[:, :n_].float()
             if self.training and getattr(self.cfg, "note_drop", 0) > 0:  # whole rows without notes: still sings / talks
@@ -1145,6 +1182,8 @@ class DacTTS(nn.Module):
             ua = uniform_attn(x_mask.sum(1), y_mask.sum(1), x_mask.shape[1], y_mask.shape[1]).transpose(1, 2).to(mu_x.dtype)
             cond = torch.cat([ua @ mu_x, ua @ h.to(mu_x.dtype)], dim=-1)
         pitch_rows = None  # VTV rows in exact-pitch mode with the pitch-following loss (cfg.vtv_pitch_weight)
+        if (hints or {}).get("pitch_rows") is not None:  # (11-18, singing branch) sung rows judged by RMVPE too
+            pitch_rows = hints["pitch_rows"].to(y.device)
         if vtv is not None and self.vtv_in is not None and contour is not None:  # voice-to-voice rows: the recording's
             from .vtv import contour_feats                                       # content + contour, not the text
             content, vrows = vtv[0], vtv[1]
@@ -1373,7 +1412,7 @@ class DacTTS(nn.Module):
                    prompt_guidance=1.0, dlv=None, emph=None, contour_net=None, prompt_guidance_until=1.0,
                    whisper_guidance=1.0, band_guidance=1.0, lang_guidance=1.0, style_transfer=0.0, apg=None,
                    target_len=None, len_quantum=None, notes=None, word_frames=None, word_ids=None,
-                   word_vowels=None, note_guidance=1.0, prompt_labels=None, emph_stretch=0.0, word_ms=None,
+                   word_vowels=None, note_guidance=1.0, note_cfg=False, prompt_labels=None, emph_stretch=0.0, word_ms=None,
                    word_tok=None, durations_only=False, align_to=None, start_t=None, record=None, ref_seg=None, short_fix=True,
                    cfg_from=0.0, prompt_guidance_from=0.0, anti_voice=0.0,
                    np_drop_pe=False, guid_w=None):
@@ -1736,7 +1775,7 @@ class DacTTS(nn.Module):
         import functools
         nfe = None
         if notes is not None and getattr(self.cfg, "use_notes", False):  # (B, T, 4) per frame, padded / cut to the length
-            nfe = torch.zeros(cond.shape[0], cond.shape[1], 4, device=cond.device)
+            nfe = torch.zeros(cond.shape[0], cond.shape[1], notes.shape[-1], device=cond.device)  # (4, or 4 + beat track)
             n_ = min(nfe.shape[1], notes.shape[1]); nfe[:, :n_] = notes[:, :n_].float().to(cond.device)
         decoder = self.fast_decoder if cond.is_cuda else self.decoder  # compiled copy on the GPU (enable_fast_decoder)
         rmem = None
@@ -1768,7 +1807,7 @@ class DacTTS(nn.Module):
         use_ng = note_guidance != 1.0 and nfe is not None
         dec_nonotes = functools.partial(decoder, beat=beat, notes=torch.zeros_like(nfe)) if use_ng else None
         dec2 = functools.partial(decoder, beat=None if beat is None else torch.cat([beat, beat]),
-                                 notes=None if nfe is None else torch.cat([nfe, nfe]),
+                                 notes=None if nfe is None else torch.cat([nfe, torch.zeros_like(nfe) if note_cfg else nfe]),
                                  ref=refs([1.0] * bsz + [0.0] * bsz))  # (conditional, unconditional)
 
         use_np = ctx is not None and prompt_guidance != 1.0
@@ -1810,7 +1849,7 @@ class DacTTS(nn.Module):
             P = [("c", g, cond, ctx, nfe)]  # (name, global cond, text cond, prompt, notes)
             cfg_now = use_cfg and cfg_from <= t_now[0] < cfg_until
             if cfg_now:
-                P.append(("u", g, torch.zeros_like(cond), zc, nfe))
+                P.append(("u", g, torch.zeros_like(cond), zc, zn if note_cfg else nfe))  # note_cfg: no-text pass also note-less (singing: guidance pulls to the written pitch)
             for on, name, gv in ((use_lg, "lg", g_plain), (use_bg, "bg", g_lowband), (use_wg, "wg", g_normal),
                                  (use_sg, "sg", g_nospk), (use_langg, "lang", g_nolang)):
                 if on:

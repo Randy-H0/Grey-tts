@@ -628,8 +628,10 @@ class Synthesizer:
             voice_own = sl.get(spk_name) or (native_lang(spk_name) if (spk_name in sl or not sl) else (prompt_lang_ or "en"))
         marked = any("]:" in t for t in texts)
         T.mixed_script(True)  # Japanese lines with English / Spanish words: each part in its own script
+        _tok = kw.pop("token_ids", None)  # (11-20, singing editor) ready token ids for the one line: skip text encoding
         try:
-            enc = [T.encode_marked(t, self.model.cfg.add_blank, l) for t, l in zip(texts, langs)]
+            enc = ([(list(map(int, _tok)), [None] * len(_tok))] if _tok is not None else
+                   [T.encode_marked(t, self.model.cfg.add_blank, l) for t, l in zip(texts, langs)])
         finally:
             T.mixed_script(False)
         nv = self.model.encoder.emb.weight.shape[0]  # older models lack newer letters (e.g. German a-umlaut / sharp s)
@@ -640,6 +642,11 @@ class Synthesizer:
         seconds = kw.pop("seconds", None)  # optional length override for the line (the prompt keeps its own timing)
         # sing given notes (composer output, cfg.use_notes): [(onset s, duration s, MIDI, word index)], words = text.split()
         song_notes = kw.pop("notes", None)
+        # (11-18, singing tests) a ready note track per frame (T, 4) with the caller's own token lengths (durations=): no
+        # timing rule -- the singing branch heard with a real singer's letter lengths
+        note_frames = kw.pop("note_frames", None)
+        if note_frames is not None and getattr(self.model.cfg, "use_notes", False):
+            kw["notes"] = torch.as_tensor(np.asarray(note_frames, dtype=np.float32))[None].to(self.device)
         # singing: whole bars. bpm (+ beats_per_bar, default 4) -> the predicted length is rounded to whole bars;
         # bars=N sets the bar count by hand (overrides both the duration model's choice and `seconds`)
         bpm, bars, bpb = kw.pop("bpm", None), kw.pop("bars", None), kw.pop("beats_per_bar", 4)

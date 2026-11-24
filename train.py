@@ -347,6 +347,7 @@ def main():
     else:  # new run, or switching codec: normalization from this data
         latent = (KVAELatent.from_stats(stats) if cfg.codec == "kvae" else LatentSpace.from_stats(stats, cfg.n_q)).to(dev)
     cross_on = getattr(cfg, "cross_prob", 0) > 0
+    lap_state = None  # (11-24 cfg.lap_resume: {seed, lap, pos, cache}, written next to last.pt)
     if fast is not None:  # everything below, prebuilt (same split, caps, oversampling, filter, pools)
         val_items, train_items, train_ds = [dict(v) for v in fast.val_items], None, fast.train_ds
         print(f"validation: {len(val_items)} clips, held out (cache)")
@@ -354,7 +355,19 @@ def main():
         print("  by language: " + ", ".join(f"{k} {v:.1f} h" for k, v in sorted(fast.by_lang.items())))
         if cross_on and getattr(cfg, "plan_cross", False):
             from dacts.fastdata import FastPlannedBatchSampler
-            sampler = FastPlannedBatchSampler(train_ds, cfg.batch_patches, longest_first=getattr(cfg, "longest_first", False))
+            if getattr(cfg, "lap_resume", False):  # (11-24 v18, you: "a full lap of the entire dataset") resume the lap
+                lf = out / "lap.json"
+                lap_state = json.loads(lf.read_text(encoding="utf-8")) if lf.exists() else None
+                if lap_state is None or lap_state.get("cache") != fast.dir.name:
+                    if lap_state is not None:
+                        print(f"lap: the data cache changed ({lap_state.get('cache')} -> {fast.dir.name}): a new lap", flush=True)
+                    lap_state = {"seed": random.SystemRandom().getrandbits(63), "lap": 0, "pos": 0, "cache": fast.dir.name}
+            sampler = FastPlannedBatchSampler(train_ds, cfg.batch_patches, longest_first=getattr(cfg, "longest_first", False),
+                                              **({"seed": lap_state["seed"], "lap": lap_state["lap"], "skip": lap_state["pos"]}
+                                                 if lap_state else {}))
+            if lap_state:
+                print(f"lap {lap_state['lap']} (seed {lap_state['seed']}): plan {sampler.plan_hash}, "
+                      f"{len(sampler.batches) + lap_state['pos']:,} batches, resuming at batch {lap_state['pos']:,}", flush=True)
             _st("batch plan built")
         else:
             raise SystemExit("fast_data needs plan_cross=True (the cache plans prompts with the batches)")
@@ -401,6 +414,9 @@ def main():
                    (lambda i: (i.get("whisper") or 0) >= 0.5) if key == "whisper" else  # "whisper:3" real whispers
                    (lambda i: i.get("has_corrupt", False)) if key == "corrupt" else
                    (lambda i: key in (i.get("lang", "en"), i.get("spk_name"), Path(i.get("root", "")).name)))
+            if float(k) < 1:  # (11-22) weights below 1 ("kvae_vpx_nl:0.25") are a fast_data feature (dacts/fastdata.py)
+                print(f"oversample {spec}: a weight below 1 needs fast_data: ignored here")
+                continue
             train_items += [i for i in train_items if hit(i)] * (int(k) - 1)
         train_ds = CodesDataset(args.data[0], train_items, cfg)
         print(f"train: {len(train_ds)} utterances, {sum(i['frames'] for i in train_ds.items) / frame_rate(cfg) / 3600:.2f} h")
@@ -475,7 +491,22 @@ def main():
 
     decay, no_decay, groups = opt_groups(model, cfg)
     main_params = decay + no_decay  # everything but the code picker
+    row_opt, row_dummy, row_gi, spk_w = None, None, None, None
+    if (getattr(cfg, "row_adam_table", False) and getattr(model.global_cond, "spk", None) is not None
+            and cfg.spk_lr_mult != 1.0 and getattr(cfg, "lora_rank", 0) == 0):
+        # (11-24 v18, you: "Do 2") the voice table's Adam by rows (dacts/row_adam.py): its place in the fused AdamW is held
+        # by a 1-number stand-in (same groups and order, so checkpoints and the scheduler line up), and its 1.17 GB of
+        # state goes; the table's gradient stays dense, so the clip and every norm see it as before
+        from dacts.row_adam import RowAdam
+        spk_w = model.global_cond.spk.weight
+        row_dummy = torch.nn.Parameter(torch.zeros(1, device=spk_w.device))
+        for gi_, g_ in enumerate(groups):
+            if any(p is spk_w for p in g_["params"]):
+                row_gi = gi_
+            g_["params"] = [row_dummy if p is spk_w else p for p in g_["params"]]
     opt = torch.optim.AdamW(groups, lr=cfg.lr, betas=(0.9, 0.98), fused=True)
+    if row_dummy is not None:
+        row_opt = RowAdam(spk_w, betas=(0.9, 0.98), eps=opt.defaults["eps"])
 
     def lr_at(step):
         if getattr(cfg, "lr_drop_at", 0) and step >= cfg.lr_drop_at:
@@ -487,7 +518,15 @@ def main():
             s = step - cfg.lr_restart
             if s < cfg.warmup:
                 return cfg.lr_restart_peak * (s + 1) / cfg.warmup
-            p = min(1.0, (s - cfg.warmup) / max(1, cfg.max_steps - cfg.lr_restart - cfg.warmup))
+            L = max(1, cfg.max_steps - cfg.lr_restart - cfg.warmup)
+            hold = float(getattr(cfg, "lr_hold_frac", 0.0))  # (11-24 v18, Solver: hold the peak, cosine over the last share)
+            if hold > 0:
+                h_end = (1.0 - hold) * L
+                if s - cfg.warmup < h_end:
+                    return cfg.lr_restart_peak
+                p = min(1.0, (s - cfg.warmup - h_end) / max(1.0, L - h_end))
+            else:
+                p = min(1.0, (s - cfg.warmup) / L)
             return 0.1 + (cfg.lr_restart_peak - 0.1) * 0.5 * (1 + math.cos(math.pi * p))
         if step < cfg.warmup:
             return (step + 1) / cfg.warmup
@@ -511,6 +550,23 @@ def main():
         if missing:
             print(f"resume: new parameters start fresh: {sorted({k.rsplit('.', 2)[0] for k in missing})}")
         load_optimizer_by_name(opt, ck, model, missing)
+        if row_opt is not None:  # (11-24) the table's state: the ring's own, else converted once from the dense AdamW's
+            opt.state.pop(row_dummy, None)
+            if ck.get("row_opt") is not None:
+                row_opt.load_state_dict(ck["row_opt"])
+                print(f"resume: voice-table rows optimizer restored ({sum(r >= 0 for r in row_opt.row_of)} live rows)", flush=True)
+            else:
+                try:
+                    i_ = ckpt_param_order(ck).index("global_cond.spk.weight")
+                    st_ = ck["opt"]["state"].get(i_)
+                except (ValueError, KeyError):
+                    st_ = None
+                if st_ is not None and tuple(st_["exp_avg"].shape) == tuple(spk_w.shape):
+                    k_ = row_opt.from_dense(st_["exp_avg"], st_["exp_avg_sq"], int(st_["step"]))
+                    print(f"resume: voice-table Adam state -> rows optimizer ({k_} recent rows of {spk_w.shape[0]:,} kept)", flush=True)
+                else:
+                    print("resume: no dense voice-table state found: the rows optimizer starts fresh", flush=True)
+            torch.cuda.empty_cache()
         sched.load_state_dict(ck["sched"])
         sched.base_lrs = [g["initial_lr"] for g in opt.param_groups]  # (the checkpoint may have fewer groups)
         step = ck["step"]
@@ -682,8 +738,11 @@ def main():
         torch.save({"model": model.state_dict(), "ema": ema.state_dict(), "opt": opt.state_dict(),
                     "sched": sched.state_dict(), "step": step, "cfg": cfg.to_dict(), "latent": latent.state(),
                     "speakers": speakers, "conditioning": conditioning, "speaker_langs": speaker_langs,
+                    **({"row_opt": row_opt.state_dict()} if row_opt is not None else {}),
                     **({"head_opt": head_opt.state_dict(), "head_sched": head_sched.state_dict()} if head_opt else {})},
                    ck_path)
+        if lap_state is not None:  # (11-24) where the lap stands, matching the step just saved
+            (out / "lap.json").write_text(json.dumps(lap_state), encoding="utf-8")
         if Path("models").is_dir() and not args.ckpt_dir:  # project's models/ folder: what the website loads
             w = {k: (v.half() if v.is_floating_point() else v) for k, v in _plain(ema.state_dict()).items()}
             tmp = Path("models") / f"{out.name}.tmp"
@@ -757,11 +816,18 @@ def main():
         mem_pk[name], mem_pk["hold"] = max(mem_pk[name], v), max(mem_pk["hold"], v)
         torch.cuda.reset_peak_memory_stats()
     oom_ms = 0.0
+    def _vtv_n(n_rows):  # (11-24 v18) voice-to-voice rows per batch: a share of the rows (cfg.vtv_share), else the count
+        sh = float(getattr(cfg, "vtv_share", 0.0))
+        if sh <= 0:
+            return cfg.vtv_rows
+        k = sh * n_rows  # (stochastic rounding: the share holds on average, batch after batch)
+        return int(k) + (1 if random.random() < k - int(k) else 0)
+
     def _vtv_make(b):  # (2026-11-07) the VTV rows' targets, built one batch ahead on a second thread (dacts/ahead.py)
         codes_g = b[2].to(dev, non_blocking=True)
         spk_ = b[4]
         vf = vtv_only_spk[spk_.clamp(0, len(vtv_only_spk) - 1)] & (spk_ >= 0) if vtv_only_spk is not None else None
-        return codes_g, vtv_feat.batch(codes_g, b[3], cfg.vtv_rows, cfg.vtv_shift, exact=(
+        return codes_g, vtv_feat.batch(codes_g, b[3], _vtv_n(len(b[3])), cfg.vtv_shift, exact=(
             cfg.vtv_exact_prob, cfg.vtv_exact_shift, cfg.vtv_exact_seg, cfg.patch, b[9].get("known_len"))
             if cfg.vtv_exact_prob > 0 else None, force=vf,
             force_exact=cfg.vtv_only_exact if cfg.vtv_only_exact >= 0 else None)
@@ -774,12 +840,31 @@ def main():
         ema_cpu = CpuAverage(ema, model_params, int(os.environ.get("EMA_CPU", "50")))
         torch.cuda.empty_cache()
         print(f"weight average: in system RAM, updated every {ema_cpu.every} steps (EMA_CPU)", flush=True)
+    def _row_zero():  # (11-24) the voice table is not in the fused AdamW: its gradient is cleared here
+        if spk_w is not None:
+            spk_w.grad = None
+
+    cpool, cp = None, {"last": -10**9, "due": float(step), "calls": 0, "rows": 0, "w": 0.0, "edit": False,
+                      "nc": {False: [66.0], True: [21.0]}}  # (Solver 11-24: running MEDIAN of the last 21 reads per pool,
+    # seeded from v17.log's block medians: normal 66, word-gap 21 per unit weight)
+    if critic is not None:
+        critic.ref_weight = float(cfg.critic_weight)  # (the word critic's weight follows the call's: 1.0 when the pool is off)
+    if critic is not None and getattr(cfg, "critic_pool", False):  # (11-24 train-loop rewrite: dacts/critic_pool.py)
+        from dacts.critic_pool import CriticPool
+        cpool = CriticPool(int(cfg.critic_pool_rows))
+        print(f"critic: row pool, {cfg.critic_pool_rows} real rows per call, at least {cfg.critic_gap} steps apart, "
+              f"pull {cfg.critic_pull} (main gradient clipped on its own first)", flush=True)
     _st("setup done, entering the training loop")
     if torch.cuda.is_available():
         print(f"GPU memory held before the first step: {torch.cuda.memory_allocated() / 2**30:.2f} GB "
               f"(weights, their average, side models; the optimizer's state comes with the first steps)", flush=True)
     _st_first = step
+    _lap_first = True
     while step < cfg.max_steps:
+        if lap_state is not None and not _lap_first:  # (11-24) the sampler moved on to its next lap
+            lap_state.update(lap=int(sampler.lap), pos=0)
+            print(f"lap {sampler.lap} begins: plan {sampler.plan_hash}", flush=True)
+        _lap_first = False
         epoch_batches, bi = list(getattr(sampler, "batches", None) or []), -1  # the loader yields them in this order
         import gc as gc_mod  # (the ~1.4M batch lists + ~5.6M row tuples out of the garbage collector's full passes: those
         gc_mod.collect()  # walk everything and can stall a step for seconds; speedups/ZIPPY_REPORT.md item 11)
@@ -787,6 +872,8 @@ def main():
         for (tokens, x_len, codes, y_len, spk, style, volume, speed, lang, ctx), pre in (
                 Ahead(dl, _vtv_make, dev) if use_ahead else ((b_, None) for b_ in dl)):
             bi += 1
+            if lap_state is not None:
+                lap_state["pos"] += 1  # (every batch the trainer takes, skipped ones too: the restart skips exactly these)
             if prof_at is not None and step == prof_at:
                 try:
                     from torch.profiler import ProfilerActivity, profile
@@ -832,6 +919,7 @@ def main():
             nb = dict(non_blocking=True)  # (pinned by the loader: a blocking copy would wait for all queued GPU work)
             diag = {"bi": bi, "x_len": x_len_cpu, "y_len": y_len_cpu, "spk": spk, "lang": lang, "ctx": ctx}  # (CPU, for nan_batches)
             vtv_force = vtv_only_spk[spk.clamp(0, len(vtv_only_spk) - 1)] & (spk >= 0) if vtv_only_spk is not None else None
+            rows_cpu = torch.unique(spk[spk >= 0]).tolist() if (row_opt is not None and spk is not None) else []
             spk = spk.to(dev, **nb) if cfg.n_speakers > 1 else None
             style = style.to(dev, **nb) if cfg.use_style else None
             volume = volume.to(dev, **nb) if cfg.use_volume else None
@@ -852,11 +940,19 @@ def main():
                         lmf = text_lm(ctx["texts"], ctx["prev_texts"])
                 if timed:
                     phase_ev[1].record()
-                model._critic_now = critic is not None and step % cfg.critic_every == 0
+                model._critic_edit_only = False
+                if cpool is None:
+                    model._critic_now = critic is not None and step % cfg.critic_every == 0
+                elif cpool.short() and step >= cp["due"] - 6:  # (Solver 11-24: harvest only the last ~6 steps before a call:
+                    model._critic_now = True                  # ~2.5 real rows a step, so pooled rows stay a few steps old)
+                else:  # the thin word-gap supply: harvested all along (every critic_harvest_every-th step), word gaps only
+                    model._critic_now = (cfg.critic_edit > 0 and cpool.size(True) < cpool.rows
+                                         and step % cfg.critic_harvest_every == 0)
+                    model._critic_edit_only = model._critic_now
                 model._critic_alt = ctx["alt_tgt"].to(dev, non_blocking=True) if "alt_tgt" in ctx and model._critic_now else None
                 if isinstance(pre, BaseException):
                     raise pre  # (the ahead thread's failure, e.g. out of memory: handled here as the inline call's was)
-                vtv = pre[1] if pre is not None else vtv_feat.batch(codes, y_len_cpu, cfg.vtv_rows, cfg.vtv_shift, exact=(  # (exact pitch: 2026-10-31)
+                vtv = pre[1] if pre is not None else vtv_feat.batch(codes, y_len_cpu, _vtv_n(len(y_len_cpu)), cfg.vtv_shift, exact=(  # (exact pitch: 2026-10-31)
                     cfg.vtv_exact_prob, cfg.vtv_exact_shift, cfg.vtv_exact_seg, cfg.patch, ctx.get("known_len"))
                     if cfg.vtv_exact_prob > 0 else None, force=vtv_force,  # (sing_* rows: always, cfg.vtv_only_prefix)
                     force_exact=cfg.vtv_only_exact if cfg.vtv_only_exact >= 0 else None) if vtv_feat is not None else None
@@ -901,6 +997,17 @@ def main():
                 if "vtv_pitch" in losses:  # exact-pitch VTV rows follow the contour (dacts/vtv.py, 2026-10-31)
                     loss = loss + cfg.vtv_pitch_weight * losses["vtv_pitch"]
                 critic_in = losses.pop("_critic", None)
+                if vtv is not None:  # (11-24 stage 0) voice-to-voice rows and all rows per step, averaged in the log
+                    losses["vtv_n"] = vtv[1].float().sum()
+                losses["rows_n"] = torch.full((), float(len(x_len_cpu)), device=dev)
+                if cpool is not None:  # (11-24) harvest into the pool; fire with a full call's worth of real rows
+                    cpool.add(critic_in)
+                    critic_in = None
+                    if step >= cp["due"]:  # (critic_gap may be fractional: 25.4 = alternately 25 and 26 steps)
+                        e_ = cpool.ready()
+                        if e_ is not None:
+                            critic_in, cp["last"], cp["edit"] = cpool.take(e_), step, bool(e_)
+                            cp["due"] = max(cp["due"] + cfg.critic_gap, step + 1.0)
                 sim_in = losses.pop("_sim", None)
                 if sim_in is not None and sim_loss is not None:
                     s = sim_loss(*sim_in)
@@ -914,9 +1021,9 @@ def main():
                         losses["vtv_rmvpe"] = s
                         loss = loss + cfg.vtv_rmvpe_weight * s
 
-                opt.zero_grad(set_to_none=True)
+                opt.zero_grad(set_to_none=True); _row_zero()
                 if head_opt is not None:
-                    head_opt.zero_grad(set_to_none=True)
+                    head_opt.zero_grad(set_to_none=True); _row_zero()
                 if timed:
                     phase_ev[2].record()
                 loss.backward()
@@ -930,31 +1037,53 @@ def main():
                     _gn = lambda: torch.linalg.vector_norm(torch.stack([n_.float() for n_ in torch._foreach_norm([q.grad for q in main_params if q.grad is not None])]))  # noqa: E731
                     gnf = _gn().detach()
                     n_cr = float(critic_in.get("n_real", 0))  # (11-14 Solver: real, scored rows per critic step)
+                    sfx = "_e" if critic_in.get("edit") else ""  # (11-22 Solver) word-gap critic steps logged apart (critic_e ...)
                     if getattr(cfg, "critic_eval", False):  # (11-14 Solver) no dropout in the take the critic judges: rollout AND
                         model.decoder.eval()  # its backward (checkpointing recomputes the forward there) in eval mode
+                    w_c = cfg.critic_weight
+                    if cpool is not None:  # (11-24) the main gradient clipped on its own, then the critic's at ~critic_pull
+                        gl_ = [q.grad for q in main_params if q.grad is not None]
+                        torch._foreach_mul_(gl_, torch.clamp(cfg.grad_clip / (gnf + 1e-6), max=1.0))
+                        del gl_  # (11-24 smoke: the list kept every old gradient alive past zero_grad: +2 GB, OOM streak)
+                        gnf = torch.clamp(gnf, max=cfg.grad_clip)
+                        nc_med = sorted(cp["nc"][cp["edit"]])[len(cp["nc"][cp["edit"]]) // 2]
+                        w_c = 2.0 * cfg.critic_pull / nc_med  # (Solver: deliberately ~2x, then the sum is clipped to
+                        # sqrt(1 + pull^2): nearly every call lands with the critic part at ~pull, as v17's clip did at 1.0)
                     try:
-                        r = critic(model.decoder, critic_in, cfg.patch, fast=cfg.critic_fast, weight=cfg.critic_weight)
+                        r = critic(model.decoder, critic_in, cfg.patch, fast=cfg.critic_fast, weight=w_c)
                     finally:
                         model.decoder.train()
                     critic_in = None
+                    if cpool is not None and r is not None:  # the critic's own norm per unit weight (one read per call)
+                        g_tot = _gn()
+                        c_part = torch.sqrt(torch.clamp(g_tot ** 2 - gnf ** 2, min=0.0))
+                        nc_ = float(c_part) / max(w_c, 1e-12)
+                        if math.isfinite(nc_) and nc_ > 0:
+                            cp["nc"][cp["edit"]] = (cp["nc"][cp["edit"]] + [nc_])[-21:]
+                        clip_c = cfg.critic_safety_clip or math.sqrt(1.0 + cfg.critic_pull ** 2)
+                        s_c = torch.clamp(clip_c / (g_tot + 1e-6), max=1.0)
+                        losses["crit_pull" + sfx] = c_part * s_c  # (the critic part after the clip: ~pull on nearly every call)
+                        losses["crit_weak" + sfx] = (g_tot < clip_c).float()  # (calls the clip did not bite: weak, should be rare)
+                        cp["calls"], cp["rows"], cp["w"] = cp["calls"] + 1, cp["rows"] + n_cr, w_c
                     if r is not None:
-                        losses["critic"] = r[1]  # (logged: mean voice match of the model's own takes, WavLM-SV)
-                        losses["gnf"], losses["gnc"] = gnf, _gn().detach()  # (logged: grad norm without / with the critics)
-                        losses["crit_n"] = torch.full((), n_cr, device=gnf.device)
-                        losses["crit_on"] = torch.ones((), device=gnf.device)  # (11-14 Solver: critic steps that ran, the divisor)
+                        losses["critic" + sfx] = r[1]  # (logged: mean voice match of the model's own takes, WavLM-SV)
+                        losses["gnf" + sfx], losses["gnc" + sfx] = gnf, _gn().detach()  # (logged: grad norm without / with the critics)
+                        losses["crit_n" + sfx] = torch.full((), n_cr, device=gnf.device)
+                        losses["crit_on" + sfx] = torch.ones((), device=gnf.device)  # (11-14 Solver: critic steps that ran, the divisor)
                         if critic.last_cos2 is not None:
-                            losses["critic2"] = critic.last_cos2  # (logged: the second verifier's voice match, ERes2NetV2)
+                            losses["critic2" + sfx] = critic.last_cos2  # (logged: the second verifier's voice match, ERes2NetV2)
                         if critic.last_word is not None:
-                            losses["wordcrit"] = critic.last_word  # (logged: KL real-vs-take letters, word critic)
+                            losses["wordcrit" + sfx] = critic.last_word  # (logged: KL real-vs-take letters, word critic)
                         if critic.last_contrast is not None:  # (logged: contrast loss, weight on wrong prompts, margin)
-                            losses["contrast"], losses["c_wrong"], losses["c_margin"] = critic.last_contrast.unbind()
+                            c_ = critic.last_contrast.unbind()
+                            losses["contrast" + sfx], losses["c_wrong" + sfx], losses["c_margin" + sfx] = c_
             except torch.OutOfMemoryError:
                 oom = True
             if oom:  # (outside the except: its traceback would keep the failed step's tensors alive)
                 y = lmf = loss = losses = None
-                opt.zero_grad(set_to_none=True)
+                opt.zero_grad(set_to_none=True); _row_zero()
                 if head_opt is not None:
-                    head_opt.zero_grad(set_to_none=True)
+                    head_opt.zero_grad(set_to_none=True); _row_zero()
                 import gc
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -970,13 +1099,23 @@ def main():
                 phase_ev[4].record()  # (after the critic)
                 if getattr(model, "_critic_now", False):
                     _pk("crit")
-            gn = torch.nn.utils.clip_grad_norm_(main_params, cfg.grad_clip)
+            clip_ = cfg.grad_clip
+            if cpool is not None and cp["last"] == step:  # (11-24) a critic call ran: main and critic already sized apart
+                clip_ = cfg.critic_safety_clip or math.sqrt(1.0 + cfg.critic_pull ** 2)
+            gn = torch.nn.utils.clip_grad_norm_(main_params, clip_)
             if head_opt is None:  # 2026-10-22 (speed): checked on the GPU, read a step later (check_bad); never applied
                 bad = (~(torch.isfinite(gn) & torch.isfinite(loss.detach()))).float()  # (0-dim, like the optimizer's step counters)
                 opt.found_inf, opt.grad_scale = bad, None  # the fused AdamW skips the whole update when bad = 1
                 opt.step()
                 del opt.found_inf, opt.grad_scale
-                opt.zero_grad(set_to_none=True)  # (11-14 Solver: free the gradients now, not after the next forward: ~2 GB)
+                if row_opt is not None:  # (11-24) the voice table's rows, same rate as its group, the same skip flag
+                    if step - _st_first < 3 or step % 5000 == 0:  # (at the start + every 5k: the batch's rows hold the table's whole gradient)
+                        _g = spk_w.grad
+                        if _g is not None:
+                            _f, _r = float(_g.norm()), float(_g[torch.tensor(rows_cpu, dtype=torch.long, device=_g.device)].norm()) if rows_cpu else 0.0
+                            print(f"rows optimizer check: table grad norm {_f:.6g}, batch rows {_r:.6g}", flush=True)
+                    row_opt.step(rows_cpu, opt.param_groups[row_gi]["lr"], bad=bad)
+                opt.zero_grad(set_to_none=True); _row_zero()  # (11-14 Solver: free the gradients now, not after the next forward: ~2 GB)
                 sched.step()
                 flag = bad.to("cpu", non_blocking=True)
                 ev = torch.cuda.Event()
@@ -987,7 +1126,7 @@ def main():
                 # 2026-10-22: one non-finite step turned every v13xl weight into NaN within 100 steps. Never apply it:
                 # skip the update (and the EMA), keep the batch for diagnosis, stop if it keeps happening
                 nan_skips, nan_run = nan_skips + 1, nan_run + 1
-                opt.zero_grad(set_to_none=True)
+                opt.zero_grad(set_to_none=True); _row_zero()
                 if nan_skips <= 20:
                     try:
                         bad = {k: float(v.detach().float()) for k, v in losses.items() if torch.is_tensor(v) and v.numel() == 1}
@@ -1014,12 +1153,14 @@ def main():
             else:
                 nan_run = 0
                 opt.step()
-                opt.zero_grad(set_to_none=True)  # (11-14: as above)
+                if row_opt is not None:
+                    row_opt.step(rows_cpu, opt.param_groups[row_gi]["lr"])
+                opt.zero_grad(set_to_none=True); _row_zero()  # (11-14: as above)
                 sched.step()
             if head_opt is not None:
                 torch.nn.utils.clip_grad_norm_(model.code_head.parameters(), 1.0)
                 head_opt.step()
-                head_opt.zero_grad(set_to_none=True)  # (11-14: as above)
+                head_opt.zero_grad(set_to_none=True); _row_zero()  # (11-14: as above)
                 head_sched.step()
 
             known = ctx.get("known_len")  # (CPU tensors: no GPU wait)
@@ -1061,10 +1202,18 @@ def main():
                 n_good = max(1.0, float(n_ok))
                 # (11-14 Solver) critic values: mean over the critic steps that actually ran (crit_on), not over every slot;
                 # crit_ran = the share of critic slots that ran (empty windows / no eligible rows skip the critic)
-                CK = ("critic", "critic2", "wordcrit", "contrast", "c_wrong", "c_margin", "gnf", "gnc", "crit_n")
+                CK = ("critic", "critic2", "wordcrit", "contrast", "c_wrong", "c_margin", "gnf", "gnc", "crit_n", "crit_pull", "crit_weak")
                 n_c = float(acc.pop("crit_on", 0.0))
-                acc = {k: float(v) / (max(1.0, n_c) if k in CK else n_good) for k, v in acc.items()}
-                acc["crit_ran"] = n_c / max(1.0, n_good / cfg.critic_every)
+                n_e = float(acc.pop("crit_on_e", 0.0))  # (11-22) word-gap critic steps: their own divisor
+                acc = {k: float(v) / (max(1.0, n_c) if k in CK else max(1.0, n_e) if k[:-2] in CK and k.endswith("_e") else n_good)
+                       for k, v in acc.items()}
+                acc["crit_ran"] = (n_c + n_e) / max(1.0, n_good / (cfg.critic_every if cpool is None else cfg.critic_gap))
+                if cpool is not None:  # (11-24) pool sizes and the critic's weight this block
+                    acc["pool"], acc["pool_e"], acc["crit_w"] = cpool.size(False), cpool.size(True), cp["w"]
+                    acc["crit_nc"] = sorted(cp["nc"][False])[len(cp["nc"][False]) // 2]
+                    acc["crit_nc_e"] = sorted(cp["nc"][True])[len(cp["nc"][True]) // 2]
+                if n_e:
+                    acc["crit_e"] = n_e  # (how many critic steps this block judged word gaps)
                 n_ok = 0.0
                 msg = " ".join(f"{k} {v:.4f}" for k, v in acc.items())
                 peak = max(mem_pk["hold"], torch.cuda.max_memory_allocated()) / 2**30 if torch.cuda.is_available() else 0.0
@@ -1084,9 +1233,12 @@ def main():
                 # allocator, squeezed by the VRAM cap, retrying / freeing and re-requesting memory more and more?
                 am = f" | alloc retries {d_al['num_alloc_retries']} mallocs {d_al['num_device_alloc']} frees {d_al['num_device_free']}"
                 res = torch.cuda.memory_reserved() / 2**30 if torch.cuda.is_available() else 0.0
-                print(f"step {step} | {msg} | gn {gn:.2f} | lr {sched.get_last_lr()[0]:.2e} | {cfg.log_every / dt:.1f} it/s | peak {peak:.1f} GB res {res:.1f}{ph}{am}")
+                h_now = heard["clips_s"] + heard["prompts_s"]  # (11-24 stage 0) seconds of audio learned per second
+                aud_s = (h_now - heard.get("_prev_log", h_now)) / max(dt, 1e-6)
+                heard["_prev_log"] = h_now
+                print(f"step {step} | {msg} | gn {gn:.2f} | lr {sched.get_last_lr()[0]:.2e} | {cfg.log_every / dt:.1f} it/s | aud/s {aud_s:.0f} | peak {peak:.1f} GB res {res:.1f}{ph}{am}")
                 try:
-                    heard_f.write_text(json.dumps({**heard, "step": step}), encoding="utf-8")
+                    heard_f.write_text(json.dumps({**{k: v for k, v in heard.items() if not k.startswith("_")}, "step": step}), encoding="utf-8")
                 except OSError:
                     pass
                 # 2026-10-22: asked to restart (tools/train_watchdog.py, when the GPU spilled into system RAM and steps

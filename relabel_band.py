@@ -26,11 +26,21 @@ def measure(job):
     """CPU worker: file -> (id, bandwidth in kHz or None), from at most 20 s of the clip."""
     uid, path, a, b = job
     try:
-        from dacts.audio_io import read_any
-        w, sr = read_any(str(path))
+        w = None
+        if a is not None and b is not None:  # (11-22: a clip inside a long file, e.g. a 13 h VoxPopuli plenary day: read
+            try:                              # just its first 20 s instead of decoding the whole file for every clip)
+                import soundfile as sf
+                sr = sf.info(str(path)).samplerate
+                w, _ = sf.read(str(path), start=int(a * sr), stop=min(int(b * sr), int(a * sr) + 20 * sr),
+                               dtype="float32", always_2d=True)
+            except Exception:  # noqa: BLE001
+                w = None
+        if w is None:
+            from dacts.audio_io import read_any
+            w, sr = read_any(str(path))
+            if a is not None and b is not None:
+                w = w[int(a * sr): int(b * sr)]
         w = w.mean(1)
-        if a is not None and b is not None:
-            w = w[int(a * sr): int(b * sr)]
         return uid, bandwidth(np.ascontiguousarray(w[: 20 * sr], dtype=np.float32), sr)
     except Exception:  # noqa: BLE001
         return uid, None

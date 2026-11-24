@@ -102,6 +102,10 @@ class Config:
     dlv_prob: float = 0.5      # share of training rows that get a delivery reference
     use_prompt: bool = False   # prompted voice cloning: the decoder also sees known (reference) latents + a known-mask
     prompt_prob: float = 0.5   # share of training rows that get part of their own audio as the prompt
+    critic_edit: float = 0.0  # (11-22, you: "voice match on the filled in words as loss") share of critic steps that judge
+    # word-gap rows (edit_span_prob) when the batch has any: the take's gap spliced into the real recording vs the real one
+    edit_span_prob: float = 0.0  # (11-22, speech editing) of those rows, this share hide a SHORT span (5-25 % of the clip,
+    # ~1-3 words) in the middle instead of 70-100 %: audio known on both sides, learn to fill a word gap (0 = off)
     # cross-clip prompting (how cloning is used): this share of rows is "clip(s) A of the same speaker (same session /
     # delivery when known) + clip B"; A (text + audio) is given, only B is learned. A <= cross_max_sec and <= B's length
     cross_prob: float = 0.0
@@ -119,6 +123,26 @@ class Config:
     teacher_ckpt: str = ""
     teacher_weight: float = 0.0
     critic_rows: int = 4        # prompted rows per critic step (batched: free when launch-bound)
+    # (11-24 train-loop rewrite, notes_solver/TRAIN_LOOP_REWRITE.md 3.2; you: "halve critic") the critic's row pool:
+    # harvest steps (every critic_harvest_every-th while the pool is short) keep only REAL windows (no filler rows); a
+    # critic call fires with critic_pool_rows real rows once critic_gap steps have passed since the last one. The main
+    # gradient is clipped on its own first, the critic's arrives with norm ~critic_pull (its weight from a running
+    # estimate of its gradient norm), and only a loose safety clip follows (critic_safety_clip, 0 = 3 x (1 + pull)).
+    # Today's dose = 8 rows per 12.7 steps with pull 3.2; halved = gap 26. False = the old loop, as v17 ran.
+    row_adam_table: bool = False  # (11-24 v18, you: "Do 2") the voice table's Adam by rows (dacts/row_adam.py): -1.17 GB,
+    # the same updates to float precision; keep it on for every resume of that run (its state is in row_opt)
+    vtv_share: float = 0.0  # (11-24 v18) > 0: voice-to-voice rows as this share of each batch's rows (v17: vtv_rows 4 of
+    # ~5.85 = 0.64; you: "keep 2/3rd of voice to voice"), so a bigger batch keeps the share; 0 = the fixed vtv_rows count
+    lap_resume: bool = False  # (11-24 v18, you: "a full lap of the entire dataset") a seeded batch plan per lap; a restart
+    # rebuilds the same plan and skips the batches already taken (runs/<out>/lap.json); False = a new random plan per start
+    lr_hold_frac: float = 0.0  # (11-24 v18) > 0: after a warm restart's warmup the peak is HELD, and the cosine to 0.1x
+    # runs only over this last share of the steps to max_steps (0 = the old cosine over all of them)
+    critic_pool: bool = False
+    critic_pool_rows: int = 8
+    critic_gap: float = 25.4
+    critic_pull: float = 3.2
+    critic_harvest_every: int = 4
+    critic_safety_clip: float = 0.0
     critic_group: int = 1       # rows fingerprinted per call (2026-11-07): 1 = one at a time (least memory), 4 = all at once
     critic_bf16: bool = False   # (2026-11-09) critic decode + fingerprint in bf16 (faster; gradients ~5% different in direction)
     critic_steps: int = 4       # Euler steps of the rollout (sway-scheduled, as the site samples)

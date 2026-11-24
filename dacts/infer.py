@@ -742,7 +742,17 @@ class Synthesizer:
             per = [T.fit_vocab(T.encode(q["text"], self.model.cfg.add_blank, q.get("lang") or T.detect_lang(q["text"], T.langs_of(getattr(self.model.cfg, 'n_langs', 8)))), nv)
                    for q in parts]  # (each clip's words on their own, as in training)
             pids = [i for q in per for i in q]
-            ids[0] = pids + ids[0]
+            if prompt.get("one_sentence") and len(parts) == 1:  # (11-24, Solver) speech editing: the prompt's words and the
+                # new line as ONE sentence (a space between them), as training's edit rows are. Glued (pids + ids, no space)
+                # is training's cross-row layout = "a new clip starts here": Grey paused 0.3-0.5 s, fell behind, dropped words
+                lg_ = parts[0].get("lang") or T.detect_lang(parts[0]["text"], T.langs_of(getattr(self.model.cfg, 'n_langs', 8)))
+                one_ = T.fit_vocab(T.encode(parts[0]["text"] + " " + texts[0], self.model.cfg.add_blank, lg_), nv)
+                if one_[:len(pids)] == pids:
+                    ids[0] = one_
+                else:
+                    ids[0] = pids + ids[0]
+            else:
+                ids[0] = pids + ids[0]
             clab = None
             if getattr(self.model.decoder, "clab_in", None) is not None and any(q.get("labels") for q in parts):
                 from .model import PROMPT_LABELS
@@ -850,6 +860,7 @@ class Synthesizer:
                 audio = self.dac.decode(self.dac.quantizer.from_codes(codes)[0])[:, 0]
         else:  # snap the flow's continuous output to the nearest codes
             z, y_len = res
+            self.last_z = (z.detach().float().cpu(), y_len.detach().cpu())  # (11-24 speech editing: the take's latents, to decode with the recording's in one pass)
             if fast_codec and self.kvae and FAST_CODEC.exists():  # the fast codec: raw latents (B, 64, T) -> 44.1 kHz
                 with torch.no_grad():
                     audio = fast_decoder(z.device)(self.latent.denormalize(z.float()).transpose(1, 2))

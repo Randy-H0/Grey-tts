@@ -1044,11 +1044,23 @@ class DacTTS(nn.Module):
                 e = self.dlv_enc(ref_lat.to(g.dtype if g is not None else ref_lat.dtype), ref_mask) * use[:, None]
                 g = e if g is None else g + e.to(g.dtype)
         known = None
+        edit_rows = None  # (speech editing) short-gap rows: their context stays the real recording (no damaged copy)
         if prompted is not None and (hints is not None or bool(prompted.any())):  # (none prompted: known all False)
             # prompted rows: a random 70-100% span is generated, the rest of the clip is given as the prompt
             b, L = y.shape[0], y_mask.sum(1)
             span = (L.float() * (0.7 + 0.3 * torch.rand(b, device=y.device))).long().clamp(min=1)
             start = (torch.rand(b, device=y.device) * (L - span + 1).float()).long()
+            ep = float(getattr(self.cfg, "edit_span_prob", 0.0))
+            if ep > 0:  # (11-22, speech editing) short gaps with audio on both sides: 5-25 % of the clip, start in 10-90 %
+                short = torch.rand(b, device=y.device) < ep
+                s_span = (L.float() * (0.05 + 0.20 * torch.rand(b, device=y.device))).long().clamp(min=10)
+                lo = (L.float() * 0.1).long()
+                room = (L - s_span - 2 * lo).clamp(min=0)
+                s_start = lo + (torch.rand(b, device=y.device) * (room + 1).float()).long()
+                span, start = torch.where(short, s_span, span), torch.where(short, s_start, start)
+                edit_rows = short & prompted
+                if corrupt is not None:  # (Solver 11-22) an edit continues the room / noise / microphone of its
+                    corrupt = (corrupt[0], corrupt[1] & ~edit_rows)  # neighbours: never the damaged copy as its context
             idx = torch.arange(y_mask.shape[1], device=y.device)[None]
             known = y_mask & ~((idx >= start[:, None]) & (idx < (start + span)[:, None])) & prompted[:, None]
         if cross is not None:
@@ -1367,9 +1379,19 @@ class DacTTS(nn.Module):
                 ok = ok & ~((alt == 1) | ((alt == 2) & bool(getattr(self.cfg, "critic_skip_up", False))))
             if zs_rows is not None and bool((ok & zs_rows).any()):  # critic_zs (owner 2026-10-31: "make sure the model learns
                 ok = ok & zs_rows  # to increase voice similarity and zero shot performance with that critic")
-            out["_critic"] = critic_windows(x1, cond, mask, ctx, g, ref_seg, gen, known & mask, ok,
-                                            rows=self.cfg.critic_rows, win=self.cfg.critic_win // p,
-                                            k_min=-(-int(getattr(self.cfg, "critic_k_min", 100)) // p), g_min=-(-160 // p))
+            ce = float(getattr(self.cfg, "critic_edit", 0.0))
+            out["_critic"] = None
+            eo = bool(getattr(self, "_critic_edit_only", False))  # (11-24 critic pool) a word-gap-only harvest step
+            if ce > 0 and (eo or float(torch.rand(())) < ce):  # (11-22) voice match on the filled-in words of word-gap rows
+                from .voice_critic import critic_edit_windows
+                ok_e = (keep > 0) if nocond is None else (keep > 0) & ~nocond  # (not limited to zero-shot rows)
+                out["_critic"] = critic_edit_windows(x1, cond, mask, ctx, g, ref_seg, gen, known & mask, ok_e,
+                                                     rows=self.cfg.critic_rows, win=self.cfg.critic_win // p,
+                                                     gap_min=-(-15 // p), gap_max=(int(getattr(self.cfg, "critic_crop", 150)) - 20) // p)
+            if out["_critic"] is None and not eo:
+                out["_critic"] = critic_windows(x1, cond, mask, ctx, g, ref_seg, gen, known & mask, ok,
+                                                rows=self.cfg.critic_rows, win=self.cfg.critic_win // p,
+                                                k_min=-(-int(getattr(self.cfg, "critic_k_min", 100)) // p), g_min=-(-160 // p))
         if self.training and getattr(self.cfg, "sim_weight", 0) > 0:  # for the speaker-similarity loss (train.py)
             sel = (t >= self.cfg.sim_t_min) & (keep > 0)
             if bool(sel.any()):
@@ -1415,7 +1437,7 @@ class DacTTS(nn.Module):
                    word_vowels=None, note_guidance=1.0, note_cfg=False, prompt_labels=None, emph_stretch=0.0, word_ms=None,
                    word_tok=None, durations_only=False, align_to=None, start_t=None, record=None, ref_seg=None, short_fix=True,
                    cfg_from=0.0, prompt_guidance_from=0.0, anti_voice=0.0,
-                   np_drop_pe=False, guid_w=None):
+                   np_drop_pe=False, guid_w=None, infill=None):
         """Returns normalized latents (B, Ty*patch, latent_dim) and frame lengths.
         word_ms / word_tok: a length in ms per word (None = the model's) and each token's word index (-1: none) --
         the site's Timing mode (owner 2026-10-23). durations_only: return the token durations (frames) right after they
@@ -1683,6 +1705,50 @@ class DacTTS(nn.Module):
                     d = torch.where(sel, d * (float(ms) / 1000.0 * fps / cur), d)
             ends = torch.round(d.cumsum(1))
             durations = torch.diff(ends, dim=1, prepend=torch.zeros_like(ends[:, :1])) * x_mask
+        inf = None
+        if infill is not None and prompt is not None:  # (11-22, you: "take the surrounding words, then completely noise out
+            # the bad word, and denoise that word with what it's supposed to be") speech editing: the prompt = the audio before
+            # the edit; the line = new word(s) + the words after; infill["latents"] = the real audio after the edit. Those
+            # words are aligned to it (as align_to), it is known context (ctx) and pinned to its real latents at every step,
+            # so only the new word's frames are made -- seeing both sides. Default off: nothing else changes.
+            n0, nn = int(prompt["n_tok"]), int(infill["n_new"])
+            suf = infill["latents"].float().to(mu_x.device)
+            suf = suf if suf.dim() == 3 else suf[None]
+            mu_s = mu_x[:, n0 + nn:].float().index_select(-1, self.align_idx)
+            y_s = suf.index_select(-1, self.align_idx).expand(mu_s.shape[0], -1, -1)
+            lp = 2 * mu_s @ y_s.transpose(1, 2) - (y_s ** 2).sum(-1)[:, None, :] - (mu_s ** 2).sum(-1)[:, :, None]
+            ms_ = x_mask.bool()[:, n0 + nn:, None] & torch.ones(1, 1, y_s.shape[1], dtype=torch.bool, device=lp.device)
+            durations = durations.clone()
+            if infill.get("mid_frames"):  # a fixed length for the new word(s) (e.g. the old word's, scaled)
+                dm = durations[:, n0:n0 + nn].float().clamp(min=0.3)
+                dm = dm.clamp(max=2.5 * float(dm.median()))  # no pause spike: the rhythm model expects a break after a prompt
+                ends = torch.round((dm * (float(infill["mid_frames"]) / dm.sum(1, keepdim=True))).cumsum(1))
+                durations[:, n0:n0 + nn] = torch.diff(ends, dim=1, prepend=torch.zeros_like(ends[:, :1])).to(durations.dtype)
+            if infill.get("seg_frames"):  # (11-24) per-word lengths: [(tok_start, tok_end, frames)] relative to the new tokens --
+                # the unchanged neighbours keep their REAL length from the recording, only the edited word's is new; inside a
+                # word the model's own split over its letters is kept (one total for the phrase squeezed its last word away)
+                for t0_, t1_, fr_ in infill["seg_frames"]:
+                    a_, b_ = n0 + int(t0_), n0 + int(t1_)
+                    dm = durations[:, a_:b_].float().clamp(min=0.3)
+                    if dm.shape[1] > 2:  # no pause spike inside a word (the break the model expects after a prompt sat on
+                        dm = dm.clamp(max=2.5 * float(dm.median()))  # the first letter: "did" = a long pause + a rushed word)
+                    ends = torch.round((dm * (float(fr_) / dm.sum(1, keepdim=True))).cumsum(1))
+                    durations[:, a_:b_] = torch.diff(ends, dim=1, prepend=torch.zeros_like(ends[:, :1])).to(durations.dtype)
+            if infill.get("lead_frames"):  # room for the pause the model puts after a prompt (cut out afterwards)
+                durations[:, n0] = durations[:, n0] + int(infill["lead_frames"])
+            durations[:, n0 + nn:] = maximum_path(lp.contiguous(), ms_.contiguous()).sum(-1).to(durations.dtype)
+            if infill.get("suf_seg_frames"):  # (11-24) the words after placed by the recording's REAL word times (the MAS
+                # above gave them a flat ~100 ms each; with text and known audio out of step the edit dropped "men")
+                for t0_, t1_, fr_ in infill["suf_seg_frames"]:
+                    a_, b_ = n0 + nn + int(t0_), n0 + nn + int(t1_)
+                    dm = durations[:, a_:b_].float().clamp(min=0.3)
+                    if dm.shape[1] > 2:
+                        dm = dm.clamp(max=2.5 * float(dm.median()))
+                    ends = torch.round((dm * (float(fr_) / dm.sum(1, keepdim=True))).cumsum(1))
+                    durations[:, a_:b_] = torch.diff(ends, dim=1, prepend=torch.zeros_like(ends[:, :1])).to(durations.dtype)
+            s0 = int(tp + durations[0, n0:n0 + nn].sum())
+            inf = (s0, suf)
+            infill["mid_frames_used"] = s0 - tp
         if durations_only:
             if record is not None:  # (tools/rhythm_data.py: the aligned timing + what the rhythm model reads)
                 record.update(durations=durations.detach(), h=h.detach().float(), g=None if g is None else g.detach().float(),
@@ -1719,6 +1785,10 @@ class DacTTS(nn.Module):
             if extra and clab_p is not None:
                 n_ = min(tp, clab_p.shape[1])
                 ctx[:, :n_, self.cfg.token_dim + 1:] = clab_p[:, :n_]
+        if inf is not None and ctx is not None and infill.get("ctx", True):  # (speech editing) the real audio after the edit: known frames too
+            s0_, suf_ = inf
+            ctx[:, s0_:s0_ + suf_.shape[1], :self.cfg.token_dim] = suf_
+            ctx[:, s0_:s0_ + suf_.shape[1], self.cfg.token_dim] = 1.0
         ctx_av = None
         if ctx is not None and anti_voice:  # the same prompt, voice colour removed
             ctx_av = ctx.clone()
@@ -1939,14 +2009,31 @@ class DacTTS(nn.Module):
         handover = None
         if pick_codes and self.code_head is not None:
             code_t = self.cfg.code_t if code_t is None else code_t
-        pin_x0 = x / max(float(temperature), 1e-6) if (PROMPT_PIN and tp) else None  # unit noise, as in training
+        pin_x0 = x / max(float(temperature), 1e-6) if ((PROMPT_PIN or (infill is not None and infill.get("pin_prompt"))) and tp) else None  # unit noise, as in training
         pin_x1 = prompt["latents"].float().to(x.device) if pin_x0 is not None else None
 
+        inf_x0 = x / max(float(temperature), 1e-6) if (inf is not None and infill.get("pin", True)) else None  # (11-24 pin=False: the real audio after only as known context)
+
+        soft = infill.get("soft") if infill is not None else None  # (11-24) {"frames", "lat", "until"}: frames held to the
+        # ORIGINAL recording's latents while t < until, then free -- the regenerated neighbour words keep the recording's own
+        # timing / pitch / flow (a timing plan alone: Grey waited ~0.7 s, then rushed the words at 0.78x)
+        soft_x0 = x / max(float(temperature), 1e-6) if soft is not None else None
+        if soft is not None:
+            soft_f = torch.as_tensor(soft["frames"], dtype=torch.long, device=x.device)
+            soft_l = soft["lat"].float().to(x.device)
+
         def pin(x_, tv):
-            if pin_x0 is None:
+            if pin_x0 is None and inf_x0 is None and (soft_x0 is None or float(tv) >= float(soft["until"])):
                 return x_
             x_ = x_.clone()
-            x_[:, :tp] = (1 - (1 - self.cfg.sigma_min) * tv) * pin_x0[:, :tp] + tv * pin_x1
+            if soft_x0 is not None and float(tv) < float(soft["until"]):
+                x_[:, soft_f] = (1 - (1 - self.cfg.sigma_min) * tv) * soft_x0[:, soft_f] + tv * soft_l
+            if pin_x0 is not None:
+                x_[:, :tp] = (1 - (1 - self.cfg.sigma_min) * tv) * pin_x0[:, :tp] + tv * pin_x1
+            if inf_x0 is not None:  # (speech editing) the real audio after the edit, at this step's noise level
+                s0_, suf_ = inf
+                e_ = s0_ + suf_.shape[1]
+                x_[:, s0_:e_] = (1 - (1 - self.cfg.sigma_min) * tv) * inf_x0[:, s0_:e_] + tv * suf_
             return x_
         ts_f = ts.tolist()  # (one sync for the whole schedule; t_now gives each evaluation its time as a float)
         for i in range(steps):

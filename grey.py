@@ -6,6 +6,7 @@ Everything it writes is marked as AI-generated (a label in the WAV file + an ina
     python grey.py speak "Hallo!" --voice lib_lena -o hallo.wav      # a built-in voice (python grey.py voices)
     python grey.py speak "Hi, it's me." --ref me.wav -o me_hi.wav    # your own voice from a recording (10-30 s)
     python grey.py vtv input.wav --voice vctk_p225 -o heron.wav      # the same words and timing, another voice
+    python grey.py edit talk.wav "I said twelve, not seven." -o fixed.wav  # change words in a real recording (English)
 """
 import argparse
 import sys
@@ -107,6 +108,21 @@ def cmd_vtv(a):
     print(f"wrote {a.out} (marked as AI-generated)")
 
 
+def cmd_edit(a):
+    """Speech editing (dacts/edit.py): the recording's words become `text`; only a short phrase around each change is
+    made again, in the recording's own voice, the rest stays the recording."""
+    from dacts.edit import edit_speech
+    from dacts.marking import write_ai_wav
+    s, dev = load(a)
+    out, info = edit_speech(s, a.input, a.text, old_text=a.old_text, seed=a.seed or 0, device=dev)
+    for e in info["edits"]:
+        print(f"  {e['old'] or '(inserted)'} -> {e['new']}")
+    if not info["edits"]:
+        print(f"nothing to change: the recording already says \"{info['old_text']}\"")
+    write_ai_wav(a.out, out, 44100)
+    print(f"wrote {a.out} (marked as AI-edited)")
+
+
 def cmd_voices(a):
     s, _ = load(a)
     names = sorted(k for k in s.speakers if not str(k).startswith(("spare", "_")))
@@ -142,6 +158,11 @@ def main():
     p = sub.add_parser("vtv", parents=[common], help="voice to voice: a recording said again in another voice")
     p.add_argument("input")
     p.set_defaults(fn=cmd_vtv)
+    p = sub.add_parser("edit", parents=[common], help="speech editing: change words in a real recording (English)")
+    p.add_argument("input", help="the recording (only your own, or with the speaker's permission)")
+    p.add_argument("text", help="what it should say: the whole new sentence")
+    p.add_argument("--old-text", help="what it says now (else transcribed with Whisper)")
+    p.set_defaults(fn=cmd_edit)
     p = sub.add_parser("voices", parents=[common], help="list a model's built-in voices")
     p.set_defaults(fn=cmd_voices)
     p = sub.add_parser("download", help="download a model from thisvoiceisai.com")

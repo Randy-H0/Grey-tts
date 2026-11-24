@@ -126,12 +126,12 @@ def spoken_language(wav44: torch.Tensor, device: str = "cuda"):
 
 
 @torch.no_grad()
-def transcribe(wav44: torch.Tensor, device: str = "cuda", language=None) -> str:
+def transcribe(wav44: torch.Tensor, device: str = "cuda", language=None, beams: int = 5) -> str:
     x = AF.resample(wav44.float(), 44100, 16000).numpy()
     if USE_FW:
-        segs, _ = _fw(device).transcribe(x, language=language, beam_size=5, task="transcribe", condition_on_previous_text=False)
+        segs, _ = _fw(device).transcribe(x, language=language, beam_size=beams, task="transcribe", condition_on_previous_text=False)
         return " ".join(s.text.strip() for s in segs).strip()
-    kw = {"task": "transcribe", "num_beams": 5, **({"language": language} if language else {})}
+    kw = {"task": "transcribe", "num_beams": beams, **({"language": language} if language else {})}
     return _pipe(device)({"raw": x, "sampling_rate": 16000}, generate_kwargs=kw)["text"].strip()
 
 
@@ -191,6 +191,75 @@ def _trim(wav44: torch.Tensor, pad: float = 0.12):
 JOIN_GAP = 0.35  # s of pause kept between two read lines joined into one reference
 
 
+_SAID = {}  # (11-23) lines of the recording being cloned that said_prefill heard as read: _said answers these from here
+
+
+def _said_key(clip44: torch.Tensor, text: str):
+    return int(clip44.numel()), round(float(clip44[:512].float().sum()), 4), str(text)
+
+
+@torch.no_grad()
+def said_prefill(wav44: torch.Tensor, script, device: str = "cuda", window: float = 27.0, gap: float = 0.6):
+    """(11-23, you: "cloning voices on the website seems to take suuuper long") Whisper pads every call to 30 s, so each
+    read line cost a whole encoder pass (5.4 s on the CPU while training runs; a 12-line recording: 13 passes, 91 s of
+    a 120 s clone). Here a recording's lines are heard together, packed in reading order into ~27 s windows (`gap` s of
+    silence between lines, one language per window), and each line gets the heard words aligned to its own script
+    words. A line that clearly matches its script (the same 80 % rule as _said) is cached as read; any other line is
+    left out, so _said hears it alone exactly as before. The spans are cut exactly as script_prompt and
+    expression_prompts cut them, so their _said calls hit the cache."""
+    import difflib
+    import re
+    _SAID.clear()
+    items = []
+    for s in script or []:
+        txt = str(s.get("text", "")).strip()
+        if not txt:
+            continue
+        a, b = float(s["start"]), float(s["end"])
+        t0, t1 = _trim(wav44[int(a * 44100): int(b * 44100)])
+        if t1 - t0 < 0.5 or t1 - t0 > window:
+            continue
+        items.append((wav44[int((a + t0) * 44100): int((a + t1) * 44100)], txt, s.get("lang") or None))
+    groups, cur, dur = [], [], 0.0
+    for it in items:
+        d = len(it[0]) / 44100
+        if cur and (cur[-1][2] != it[2] or dur + gap + d > window):
+            groups.append(cur)
+            cur, dur = [], 0.0
+        cur.append(it)
+        dur += d + (gap if len(cur) > 1 else 0.0)
+    if cur:
+        groups.append(cur)
+    for g in groups:
+        lang = g[0][2]
+        cjk = lang in ("ja", "zh")
+        norm = (lambda t: [c for c in t if c.isalnum()]) if cjk else (lambda t: re.findall(r"\w+", t.lower()))  # noqa: E731
+        sil = torch.zeros(int(gap * 44100), dtype=wav44.dtype)
+        clip = torch.cat([x for k, it in enumerate(g) for x in ([sil] if k else []) + [it[0]]])
+        try:
+            heard = norm(transcribe(clip, device, language=lang, beams=1))  # (greedy: a doubtful line is heard again alone, beam 5)
+        except Exception:  # noqa: BLE001
+            continue
+        ref, line_of = [], []
+        for k, it in enumerate(g):
+            w = norm(it[1])
+            ref += w
+            line_of += [k] * len(w)
+        got = [[] for _ in g]  # heard words per line
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, ref, heard, autojunk=False).get_opcodes():
+            if j2 == j1:
+                continue
+            if i2 == i1:  # heard words the script doesn't have: the line before them (or the first)
+                got[line_of[i1 - 1] if i1 > 0 else 0] += heard[j1:j2]
+                continue
+            for j in range(j1, j2):  # spread over the script words they stand for
+                got[line_of[i1 + (j - j1) * (i2 - i1) // (j2 - j1)]].append(heard[j])
+        for k, it in enumerate(g):
+            a_, b_ = norm(it[1]), got[k]
+            if b_ and difflib.SequenceMatcher(None, a_, b_, autojunk=False).ratio() >= 0.8:
+                _SAID[_said_key(it[0], it[1])] = it[1]
+
+
 def _said(clip44: torch.Tensor, text: str, lang, device: str = "cuda") -> str:
     """The words of a read line as they were really said (you 2026-11-05: a clone's test clips came out as "hi (gibberish)
     this is how I sound (gibberish)": the reference's text and audio didn't match -- the site trusted the sentence it had
@@ -198,6 +267,9 @@ def _said(clip44: torch.Tensor, text: str, lang, device: str = "cuda") -> str:
     differ from the script's (match < 80 %), they are used instead."""
     import difflib
     import re
+    hit = _SAID.get(_said_key(clip44, text))
+    if hit is not None:  # (said_prefill heard it read as written)
+        return hit
     try:
         heard = transcribe(clip44, device, language=lang or None)
     except Exception:  # noqa: BLE001

@@ -77,6 +77,7 @@ First takes, except Spanish and Chinese: those had a word slip, so they're the n
 - 🌍 **10 languages**: English, German, Dutch, French, Spanish, Polish, Ukrainian, Japanese, Chinese, Korean.
 - 🎙️ **Voice cloning**: 10-30 seconds of someone (with their permission) is enough.
 - 🔁 **Voice to voice**: record yourself, hear the same words and timing in another voice.
+- ✂️ **Speech editing**: change words in a real recording; only a few words around the change are made again, in that voice, the rest stays the recording (English, new).
 - 🎛️ **Delivery controls**: narration ↔ acting, mood, assertiveness, whisper ↔ shout, speed, timing, emphasis.
 - 🗣️ **Accent fix**: a voice speaking another language takes on that language's accent.
 - 🪶 **Small models too**: Smol runs on a laptop CPU (and in a web browser).
@@ -133,6 +134,8 @@ python grey.py speak "Hi, it's me." --ref me.wav -o me.wav       # your own voic
                                                                  # (Enhance voice + Experimental cloning on; --no-enhance /
                                                                  #  --no-experimental for speed)
 python grey.py vtv input.wav --voice lib_daan -o out.wav         # voice to voice (v14.5 and newer)
+python grey.py edit talk.wav "We meet at twelve, not seven." -o fixed.wav   # speech editing: type the new sentence
+                                                                 # (English; the first run downloads a 1.3 GB aligner)
 python grey.py speak "Shh..." --voice lib_lena --speed 0.2 -o s.wav --seed 7
 ```
 
@@ -148,6 +151,11 @@ write_ai_wav("hello.wav", wav, 44100)
 
 # whisper, acting, speed: volume 0 (whisper) .. 1 (shout), style 0 (narration) .. 1 (acting), speed 0 .. 1
 wav = grey("Don't tell anyone.", speaker="expresso_ex01", lang="en", volume=0.05)[0]
+
+# speech editing: the recording's words -> the new sentence (old_text=None: Whisper transcribes it)
+from dacts.edit import edit_speech
+fixed, info = edit_speech(grey, "talk.wav", "We meet at twelve, not seven.")
+write_ai_wav("fixed.wav", fixed, 44100)   # info["edits"]: what changed
 ```
 
 ## 🧩 How it works

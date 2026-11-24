@@ -2,6 +2,12 @@
 
 Grey's model versions, newest first. Every model is downloadable: `python grey.py download --list`.
 
+## Speech editing — November 2026 (code, works with v16+)
+- ✂️ **Change words in a real recording** (`grey.py edit`, `dacts.edit.edit_speech`): the new sentence is compared with
+  what the recording says; for each change Grey says a short phrase again (the new words plus a neighbour or two, in the
+  recording's own timing and voice) and the result is joined into the original at real word gaps, with the recording's
+  own background under it. English only for now; the first run downloads a forced aligner (hubert-large, 1.3 GB).
+
 ## v16+ — November 2026
 - 🇺🇦 **Ukrainian** joins: 10 languages.
 - More Dutch, Polish and Spanish voices.

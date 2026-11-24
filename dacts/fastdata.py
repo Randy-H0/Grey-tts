@@ -78,7 +78,7 @@ def cache_key(paths, cfg, base_speakers, context) -> str:
             return [p.name, None]
         s = p.stat()
         return [p.name, s.st_size, int(s.st_mtime)]
-    files = ["manifest.jsonl", "speakers.json", "stats.pt", "conditioning.json", "spkemb_ids.json"] + \
+    files = ["manifest.jsonl", "speakers.json", "stats.pt", "conditioning.json", "spkemb_ids.json", "voice_alias.json"] + \
             [f"shards/{k}_index.json" for k in KINDS]
     blob = {"v": VERSION, "dirs": [[str(Path(d)), [stamp(Path(d) / f) for f in files]] for d in paths],
             "cfg": {k: getattr(cfg, k, None) for k in CFG_KEYS},
@@ -162,6 +162,12 @@ def build(paths, cfg, base_speakers, context, out, workers=3, log=print):
         roots.append(root)
         with open(p / "manifest.jsonl", encoding="utf-8") as f:
             rows = [json.loads(line) for line in f]  # one dir at a time (<= ~372k rows)
+        if (p / "voice_alias.json").exists():  # (11-22) tools/merge_voices.py: one name per real person (video ids -> presenter)
+            alias = json.loads((p / "voice_alias.json").read_text(encoding="utf-8"))
+            for it in rows:
+                if it.get("spk_name") in alias:
+                    it["spk_name"] = alias[it["spk_name"]]
+            log(f"{p.name}: voice_alias.json merged {len(alias)} voices into others")
         n = len(rows)
         a = {k: np.zeros(n, np.int32) for k in num}
         tv = {k: (np.zeros(n, np.float32), np.zeros(n, np.uint8)) for k in TRI}
@@ -172,7 +178,8 @@ def build(paths, cfg, base_speakers, context, out, workers=3, log=print):
             for k in UNSUPPORTED:
                 if it.get(k) is not None:
                     raise Unsupported(f"{p.name}: {k}")
-            a["speaker"][j] = speakers[it.get("spk_name") or inv[it["speaker"]]]
+            a["speaker"][j] = speakers.setdefault(it.get("spk_name") or inv[it["speaker"]], len(speakers))  # (setdefault: a
+            # voice_alias.json leader can live in a set read later)
             a["root"][j] = rid
             a["frames"][j] = it["frames"]
             frames_sum += it["frames"]
@@ -313,6 +320,7 @@ def build(paths, cfg, base_speakers, context, out, workers=3, log=print):
         drop = set(mine) - set(keep)
         train_items = [i for i in train_items if i not in drop]
         log(f"voice cap {key}: {len(mine)} -> {len(keep)} clips ({len(per)} voices, <= {cap} each)")
+    frac_rules = []
     for spec in filter(None, cfg.oversample.split(",")):
         key, k = spec.rsplit(":", 1)
         if key.startswith("@"):  # (11-15) a file of voice names, one per line, e.g. @data/female_voices.txt:2
@@ -327,7 +335,25 @@ def build(paths, cfg, base_speakers, context, out, workers=3, log=print):
             hit = lambda i: bool(has_corrupt[i])  # noqa: E731
         else:
             hit = lambda i, key=key: key in (lang_of(i), spk_of(i), rootname[col["root"][i]])  # noqa: E731
+        if float(k) < 1:  # (11-22) a weight below 1, e.g. kvae_vpx_nl:0.25: applied after every whole-number rule
+            frac_rules.append((key, float(k), hit))
+            continue
         train_items += [i for i in train_items if hit(i)] * (int(k) - 1)
+    for key, w, hit in frac_rules:  # each matching clip keeps w x its copies (e.g. nl:4 then 0.25 -> 1 copy); a fraction
+        rnd, target = random.Random(0), {}  # left over is rounded at random (seed 0), so a clip may get 0 copies this run
+        for i, c in Counter(train_items).items():
+            if hit(i):
+                x = c * w
+                target[i] = int(x) + (rnd.random() < x - int(x))
+        n0, used, kept = len(train_items), Counter(), []
+        for i in train_items:
+            if i in target:
+                if used[i] >= target[i]:
+                    continue
+                used[i] += 1
+            kept.append(i)
+        train_items = kept
+        log(f"weight {key} x{w}: {len(target)} clips, {n0} -> {len(train_items)} rows")
     # ---- CodesDataset: the filter, then its pools (over rows, oversampled copies included)
     max_frames = int(cfg.max_seconds * frame_rate(cfg))
     keep = (tok_len > 0) & (tok_len <= patches) & (col["frames"] <= max_frames)
@@ -752,7 +778,7 @@ def parallel_plans(ds, n, rnd, workers=None):
         return [ds.plan_cross(i, rnd) for i in range(n)]
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor
-    k = workers * 4
+    k = 48  # (11-24, Solver: a fixed chunk count, so the plan is a function of the seed whatever the worker count; was workers * 4)
     edges = [n * j // k for j in range(k + 1)]
     jobs = [(ds, edges[j], edges[j + 1], rnd.getrandbits(64)) for j in range(k)]
     t = time.time()
@@ -875,5 +901,6 @@ if __name__ == "__main__":
     if (d / "meta.json").exists():
         print(f"already built: {d}")
     else:
-        build(paths, cfg, base, context, d)
+        import os as _os  # (11-22, you: "keep improving speed") the token step in 10 processes by hand (3 next to training)
+        build(paths, cfg, base, context, d, workers=int(_os.environ.get("FASTDATA_WORKERS", max(3, min(10, (_os.cpu_count() or 4) - 6)))))
     print(f"FASTDATA_READY {d}")

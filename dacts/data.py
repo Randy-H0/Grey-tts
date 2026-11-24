@@ -593,11 +593,27 @@ class PlannedBatchSampler(Sampler):
     are bucketed by their REAL decoder length (row + planned prompt) and packed up to max_tokens padded tokens.
     Yields lists of (row, plan) for CodesDataset.__getitem__."""
 
-    def __init__(self, ds, max_tokens, shuffle=True, margin=2, longest_first=False):
+    def __init__(self, ds, max_tokens, shuffle=True, margin=2, longest_first=False, seed=None, lap=0, skip=0):
+        """seed (11-24 v18, you: "a full lap of the entire dataset"): every lap's plan is a function of (seed, lap), so a
+        restart rebuilds the same plan and skips the `skip` batches the trainer already took (cfg.lap_resume); None = a
+        fresh random plan at every start, as before."""
         self.ds, self.max_tokens, self.shuffle, self.margin = ds, max_tokens, shuffle, margin
         self.longest_first = longest_first
-        self.rnd, self._up_idx = random.Random(), {}
+        self.seed, self.lap, self._up_idx = seed, int(lap), {}
+        self.rnd = random.Random(f"{seed}:{self.lap}") if seed is not None else random.Random()
         self.batches = self._make()
+        self.plan_hash = self._hash()
+        if skip:
+            self.batches = self.batches[int(skip):]
+
+    def _hash(self):
+        """A short fingerprint of the plan (its size, and the first row of every 1,000th batch): equal at two starts =
+        the same plan."""
+        import hashlib
+        h = hashlib.sha1(str(len(self.batches)).encode())
+        for b in self.batches[::1000]:
+            h.update(f"{b[0][0]},{len(b)};".encode())
+        return h.hexdigest()[:12]
 
     def _make(self):
         n, items, rnd = len(self.ds.items), self.ds.items, self.rnd
@@ -637,7 +653,11 @@ class PlannedBatchSampler(Sampler):
 
     def __iter__(self):
         yield from self.batches
+        self.lap += 1
+        if self.seed is not None:
+            self.rnd = random.Random(f"{self.seed}:{self.lap}")
         self.batches = self._make()
+        self.plan_hash = self._hash()
 
     def __len__(self):
         return len(self.batches)

@@ -63,6 +63,12 @@ def load_audio(path, start=None, end=None, channel=None, trim_db=40.0, pad_s=0.0
     a = int(start * sr) if start is not None else 0
     b = int(end * sr) if end is not None else -1
     wav, sr = sf.read(str(path), start=a, stop=b if b > 0 else None, dtype="float32", always_2d=True)
+    return finish_audio(wav, sr, channel, trim_db, pad_s)
+
+
+def finish_audio(wav, sr, channel=None, trim_db=40.0, pad_s=0.05):
+    """load_audio after the read: (N, channels) float32 as sf.read returns it -> channel / mean, 44.1 kHz, trimmed,
+    peak-limited. (11-22: split out so tools/process_onepass.py can read a clip once and reuse the same maths.)"""
     wav = torch.from_numpy(wav[:, channel] if channel is not None else wav.mean(1))
     if sr != SAMPLE_RATE:
         wav = AF.resample(wav, sr, SAMPLE_RATE)

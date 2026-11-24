@@ -63,6 +63,47 @@ def critic_windows(x1, cond, mask, ctx, g, ref, gen, known, ok, rows: int, win: 
             "n_real": n_real}
 
 
+def critic_edit_windows(x1, cond, mask, ctx, g, ref, gen, known, ok, rows: int, win: int, gap_min: int, gap_max: int):
+    """(11-22, you: "add the possibility to perform voice match on the filled in words as loss") Word-gap rows
+    (cfg.edit_span_prob): the generated frames are ONE short span with known (real) frames on both sides. A window of
+    `win` steps centred on that gap; VoiceCritic then puts only the gap of its own take into the real recording and
+    fingerprints that against the real recording of the same stretch -- the filled-in words must sound like this person
+    in this room. Same shapes / keys as critic_windows (+ "edit": True), so the compiled rollout is reused."""
+    B, T = mask.shape
+    if T < win:
+        return None
+    m = mask.bool()
+    gn, kn = gen & m, known & m
+    n_gen = gn.sum(1)
+    idx = torch.arange(T, device=mask.device)[None]
+    first = torch.where(gn, idx, T).min(1).values
+    last = torch.where(gn, idx, -1).max(1).values
+    rb = torch.arange(B, device=mask.device)
+    inner = (first > 0) & (last < m.sum(1) - 1) & kn[rb, (first - 1).clamp(min=0)] & kn[rb, (last + 1).clamp(max=T - 1)]
+    cand = ok & inner & ((last - first + 1) == n_gen) & (n_gen >= gap_min) & (n_gen <= gap_max) & (m.sum(1) >= win)
+    pick = cand.nonzero().flatten()
+    if not len(pick):
+        return None
+    pick = pick[torch.randperm(len(pick), device=pick.device)[:rows]]
+    n_real = len(pick)
+    if n_real < rows:  # (fixed row count: the compiled rollout's shape, as critic_windows)
+        pick = pick[torch.arange(rows, device=pick.device) % n_real]
+    centre = (first[pick] + last[pick]) // 2
+    start = torch.minimum((centre - win // 2).clamp(min=0), (m[pick].sum(1) - win).clamp(min=0))
+    fr = start[:, None] + torch.arange(win, device=start.device)[None]
+
+    def cut(a):
+        if a is None:
+            return None
+        a = a[pick]
+        i = fr if a.dim() == 2 else fr[..., None].expand(-1, -1, a.shape[-1])
+        return torch.gather(a, 1, i).detach()
+    sub = lambda a: None if a is None else a[pick].detach()  # noqa: E731
+    return {"x1": cut(x1.float()), "cond": cut(cond), "mask": cut(mask), "ctx": cut(ctx), "g": sub(g),
+            "ref": None if ref is None else tuple(sub(r) for r in ref), "gen": cut(gen), "known": cut(known),
+            "n_real": n_real, "edit": True}
+
+
 def contrast_loss(eh, er, bank, m: float = 0.2, tau: float = 0.05, same_thr: float = 0.55):
     """(Solver's reference, notes_solver/contrast_ref.py) eh (G, D) take fingerprints (unit, with grad); er (G, D) their
     prompts' (unit, no grad); bank (N, D) earlier prompts (unit, no grad). loss = -log(e^((own-m)/tau) / (that + sum
@@ -140,6 +181,7 @@ class VoiceCritic(nn.Module):
         assert compile_mode in ("", "default", "graphs"), compile_mode
         self.compile_mode = compile_mode
         self._step, self._decode = None, self.kvae.decode
+        self._edit_gen = None  # (word-gap critic windows: which frames of the take are generated)
         if compile_mode and str(device).startswith("cuda"):
             self._decode = torch.compile(self.kvae.decode, dynamic=False)
 
@@ -230,6 +272,8 @@ class VoiceCritic(nn.Module):
         the take and freed before the next row, then the rollout once -- holding all rows' graphs for one backward ran
         the 15 GB card out of memory on most critic steps (v14xl-vc1: 242 of its 251 skipped batches, 2026-10-30)."""
         from .model import unpatchify
+        rw = getattr(self, "ref_weight", None)  # (11-24) the word critic follows the call's weight (see _grouped)
+        self._wscale = float(weight) / rw if (weight is not None and rw) else 1.0
         # where the crops can go, copied to the CPU while the rollout is queued: no GPU wait per row below
         gk = torch.stack([ci["gen"], ci["known"]]).repeat_interleave(patch, dim=2)
         ev = None
@@ -244,15 +288,27 @@ class VoiceCritic(nn.Module):
         nr = ci.get("n_real", gen.shape[0])  # (filler rows past n_real: rolled out for the fixed shape, never scored)
         gen, known = gen[:nr], known[:nr]
         L, cos = self.crop, []
-        ok_g = [gen[i].unfold(0, L, 1).all(-1).nonzero().flatten() if gen.shape[1] >= L else gen.new_zeros(0)
-                for i in range(gen.shape[0])]
-        ok_k = []
-        for i in range(gen.shape[0]):
-            for kl in (L, 100):  # an all-prompt stretch: 3 s, else 2 s (same-clip prompts can sit on both sides)
-                k_ok = known[i].unfold(0, kl, 1).all(-1).nonzero().flatten() if known.shape[1] >= kl else known.new_zeros(0)
-                if len(k_ok):
-                    break
-            ok_k.append((k_ok, kl))
+        self._edit_gen = None
+        if ci.get("edit"):  # (word-gap rows) one crop per row, centred on the gap, the SAME frames as the real target
+            ok_g, ok_k = [], []
+            for i in range(gen.shape[0]):
+                gi = gen[i].nonzero().flatten()
+                if not len(gi) or gen.shape[1] < L:
+                    ok_g.append(gen.new_zeros(0)); ok_k.append((gen.new_zeros(0), L))
+                    continue
+                s_ = int(min(max(int((gi[0] + gi[-1]) // 2) - L // 2, 0), gen.shape[1] - L))
+                ok_g.append(torch.tensor([s_])); ok_k.append((torch.tensor([s_]), L))
+            self._edit_gen = gen.to(xh.device)
+        else:
+            ok_g = [gen[i].unfold(0, L, 1).all(-1).nonzero().flatten() if gen.shape[1] >= L else gen.new_zeros(0)
+                    for i in range(gen.shape[0])]
+            ok_k = []
+            for i in range(gen.shape[0]):
+                for kl in (L, 100):  # an all-prompt stretch: 3 s, else 2 s (same-clip prompts can sit on both sides)
+                    k_ok = known[i].unfold(0, kl, 1).all(-1).nonzero().flatten() if known.shape[1] >= kl else known.new_zeros(0)
+                    if len(k_ok):
+                        break
+                ok_k.append((k_ok, kl))
         n = sum(1 for g_ok, (k_ok, _) in zip(ok_g, ok_k) if len(g_ok) and len(k_ok))  # rows in the mean (no random draws)
         take = xh if weight is None else xh.detach().requires_grad_()
         # d(weight * (1 - mean cos)) / d cos_i as the one backward computed it: (-weight) / n, in fp32
@@ -269,7 +325,7 @@ class VoiceCritic(nn.Module):
             with self._prec():
                 with torch.no_grad():
                     er = self.embed(x1[i:i + 1, ks:ks + kl])
-                eh = self.embed(take[i:i + 1, s:s + L])
+                eh = self.embed(self._crop(take, x1, i, s, L)[None])
             c_i = (eh * er).sum(-1)
             if seed is not None:
                 c_i.backward(seed)  # into take.grad; this row's graph is freed here
@@ -282,6 +338,14 @@ class VoiceCritic(nn.Module):
             xh.backward(take.grad)  # the rollout: gradients into the decoder, as (weight * loss).backward() did
             return (1 - c).detach(), c.detach()
         return 1 - c, c.detach()
+
+    def _crop(self, take, x1, i, s, L):
+        """the take's crop of row i; on word-gap windows only its generated frames, the rest the real recording
+        (gradient flows through the filled-in words only)"""
+        c = take[i, s:s + L]
+        if self._edit_gen is None:
+            return c
+        return torch.where(self._edit_gen[i, s:s + L, None], c, x1[i, s:s + L].to(c.dtype))
 
     def _grouped(self, xh, x1, take, seed, ok_g, ok_k, nr):
         """forward()'s per-row loop with the fingerprints in groups of self.group rows (2026-11-07, you: "make the jobs
@@ -315,7 +379,7 @@ class VoiceCritic(nn.Module):
         for ch in chunks(rows):
             pc = padded(ch)
             with self._prec():
-                ah = self.wav16(torch.stack([take[i, draws[i][0]:draws[i][0] + L] for i in pc]))
+                ah = self.wav16(torch.stack([self._crop(take, x1, i, draws[i][0], L) for i in pc]))
                 eh = self.embed(None, ah)
             c_g = (eh * torch.stack([er[i] for i in pc])).sum(-1)  # (G,)
             c_v = c_g
@@ -344,7 +408,9 @@ class VoiceCritic(nn.Module):
                 if ok.any():
                     words.append(kl[ok].detach())
                 if seed is not None:  # weight * mean over the scored rows (padding / near-silent rows weigh nothing)
-                    obj = obj + self.asr_weight * (kl * ok).sum() / len(rows)
+                    # (11-24 Solver) scaled with the call's weight like the voice terms (_wscale = weight / cfg.critic_weight:
+                    # 1.0 exactly as v17 ran; the pooled critic's own weight moved only the voice part, and nc ran away)
+                    obj = obj + self.asr_weight * getattr(self, "_wscale", 1.0) * (kl * ok).sum() / len(rows)
             if obj is not None:
                 obj.backward()
                 c_g = c_g.detach()
